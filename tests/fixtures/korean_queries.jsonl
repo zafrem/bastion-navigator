@@ -1,0 +1,5 @@
+{"request_id":"q-ko-001","tenant_id":"tenant-acme","query":"제품 보증 조건 PROD-001","options":{"top_k":10,"use_hybrid":true,"use_reranking":true}}
+{"request_id":"q-ko-002","tenant_id":"tenant-acme","query":"고객 불만 반품 정책","options":{"top_k":5,"use_hybrid":true}}
+{"request_id":"q-ko-003","tenant_id":"tenant-acme","query":"공정 불량률 제조 현황","options":{"top_k":10,"use_reranking":true}}
+{"request_id":"q-ko-004","tenant_id":"tenant-acme","query":"직원 휴가 인사 규정","options":{"top_k":5}}
+{"request_id":"q-ko-005","tenant_id":"tenant-acme","query":"제품 리콜 안내 PROD-002","options":{"top_k":10,"use_hybrid":true}}

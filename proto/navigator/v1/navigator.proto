@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package bastion.navigator.v1;
+
+option go_package = "github.com/bastion/navigator/gen/navigator/v1;navigatorv1";
+
+service NavigatorService {
+  // Main search operations
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc HybridSearch(HybridSearchRequest) returns (SearchResponse);
+  rpc BatchSearch(BatchSearchRequest) returns (BatchSearchResponse);
+
+  // Embedding operations
+  rpc Embed(EmbedRequest) returns (EmbedResponse);
+  rpc BatchEmbed(BatchEmbedRequest) returns (BatchEmbedResponse);
+
+  // Reranking
+  rpc Rerank(RerankRequest) returns (RerankResponse);
+
+  // Management
+  rpc GetCollections(CollectionsRequest) returns (CollectionsResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// ─── Search ──────────────────────────────────────────────────────────────────
+
+message SearchRequest {
+  string request_id = 1;
+  string tenant_id  = 2;
+  string query      = 3;
+  UserContext  user    = 4;
+  SearchOptions options = 5;
+}
+
+message HybridSearchRequest {
+  SearchRequest base = 1;
+}
+
+message UserContext {
+  string user_id    = 1;
+  string department = 2;
+  repeated string roles              = 3;
+  repeated string allowed_categories = 4;
+}
+
+message SearchOptions {
+  int32  top_k          = 1;
+  int32  over_fetch      = 2;
+  bool   use_reranking  = 3;
+  bool   use_hybrid     = 4;
+  float  vector_weight  = 5;
+  float  bm25_weight    = 6;
+  map<string, string> filters = 7;
+  float  min_score      = 8;
+  int32  timeout_ms     = 9;
+}
+
+message SearchResponse {
+  string                 request_id         = 1;
+  repeated SearchResult  results            = 2;
+  SearchMetadata         metadata           = 3;
+  float                  processing_time_ms = 4;
+}
+
+message SearchResult {
+  string document_id  = 1;
+  string content      = 2;
+  float  score        = 3;
+  float  vector_score = 4;
+  float  bm25_score   = 5;
+  float  rerank_score = 6;
+  map<string, string> metadata = 7;
+  string category     = 8;
+}
+
+message SearchMetadata {
+  int32  total_candidates = 1;
+  int32  filtered_out     = 2;
+  int32  final_count      = 3;
+  bool   used_cache       = 4;
+  string strategy         = 5;
+}
+
+// ─── Batch search ─────────────────────────────────────────────────────────────
+
+message BatchSearchRequest {
+  string                  request_id = 1;
+  repeated SearchRequest  queries    = 2;
+}
+
+message BatchSearchResponse {
+  string                   request_id = 1;
+  repeated SearchResponse  results    = 2;
+}
+
+// ─── Embed ────────────────────────────────────────────────────────────────────
+
+message EmbedRequest {
+  string request_id = 1;
+  string text       = 2;
+}
+
+message EmbedResponse {
+  string         request_id = 1;
+  repeated float embedding  = 2;
+  int32          dim_count  = 3;
+}
+
+message BatchEmbedRequest {
+  string          request_id = 1;
+  repeated string texts      = 2;
+}
+
+message BatchEmbedResponse {
+  string                   request_id  = 1;
+  repeated EmbedResponse   embeddings  = 2;
+}
+
+// ─── Rerank ───────────────────────────────────────────────────────────────────
+
+message RerankRequest {
+  string                request_id  = 1;
+  string                query       = 2;
+  repeated SearchResult candidates  = 3;
+  int32                 top_k       = 4;
+}
+
+message RerankResponse {
+  string                request_id = 1;
+  repeated SearchResult results    = 2;
+}
+
+// ─── Management ───────────────────────────────────────────────────────────────
+
+message CollectionsRequest {}
+
+message CollectionsResponse {
+  repeated CollectionInfo collections = 1;
+}
+
+message CollectionInfo {
+  string name         = 1;
+  int64  vector_count = 2;
+  int32  dimensions   = 3;
+  string status       = 4;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string              status  = 1;
+  map<string, string> checks  = 2;
+  string              version = 3;
+}

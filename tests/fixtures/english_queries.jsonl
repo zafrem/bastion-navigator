@@ -1,0 +1,5 @@
+{"request_id":"q-en-001","tenant_id":"tenant-acme","query":"warranty terms for PROD-001","options":{"top_k":10,"use_hybrid":true,"use_reranking":true}}
+{"request_id":"q-en-002","tenant_id":"tenant-acme","query":"return policy customer complaints","options":{"top_k":5,"use_hybrid":true}}
+{"request_id":"q-en-003","tenant_id":"tenant-acme","query":"defect rate manufacturing process","options":{"top_k":10,"use_reranking":true}}
+{"request_id":"q-en-004","tenant_id":"tenant-acme","query":"employee leave policy HR","options":{"top_k":5}}
+{"request_id":"q-en-005","tenant_id":"tenant-acme","query":"product recall notification PROD-002","options":{"top_k":10,"use_hybrid":true}}

@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  qdrant-test:
+    image: qdrant/qdrant:v1.10.0
+    ports:
+      - "16333:6333"
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    tmpfs:
+      - /qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

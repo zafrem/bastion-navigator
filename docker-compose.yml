@@ -1,0 +1,98 @@
+version: "3.8"
+
+services:
+  navigator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bastion/navigator:1.0.0
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+      - "9091:9091"
+    environment:
+      - CONFIG_PATH=/etc/navigator/config.yaml
+    volumes:
+      - ./config:/etc/navigator
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      embedder:
+        condition: service_started
+      reranker:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "4"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.10.0
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  embedder:
+    image: bastion/embedder-bge-m3:1.0.0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models/bge-m3:/models/bge-m3
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    restart: unless-stopped
+    # Fallback to a simple mock embedding service if the image is not yet built:
+    # See scripts/mock_embedder.py
+
+  reranker:
+    image: bastion/reranker-bge:1.0.0
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./models/bge-reranker:/models/bge-reranker
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  redis_data:
