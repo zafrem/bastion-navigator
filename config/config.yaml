@@ -1,8 +1,8 @@
-version: "1.0"
+version: "3.0"
 
 server:
-  rest_port: 8080
-  grpc_port: 9090
+  rest_port: 8082
+  grpc_port: 9092
   workers: 4
 
 vector_db:
@@ -33,21 +33,19 @@ vector_db:
         ef_search: 128
 
 embedder:
-  type: bge_m3
-  endpoint: http://embedder:8000
-  model_path: /models/bge-m3
+  type: local
+  model_name: BAAI/bge-m3
   batch_size: 16
   max_length: 512
   cache:
     enabled: true
-    ttl: 1h
+    ttl_seconds: 3600
     max_size: 10000
 
 reranker:
   enabled: true
-  type: bge_reranker
-  endpoint: http://reranker:8001
-  model_path: /models/bge-reranker-v2-m3
+  type: local
+  model_name: BAAI/bge-reranker-v2-m3
   batch_size: 16
   max_length: 512
 
@@ -63,25 +61,16 @@ search_defaults:
 
 vault:
   enabled: true
-  endpoint: http://vault:8080
+  endpoint: http://vault:8081
   cache_permissions: true
-  permission_ttl: 5m
-
-tracker:
-  enabled: true
-  endpoint: http://tracker:8082
-  async: true
+  permission_ttl_seconds: 300
 
 cache:
   type: redis
   url: redis://redis:6379
-  query_cache_ttl: 1h
-  permission_cache_ttl: 5m
+  query_cache_ttl_seconds: 3600
+  permission_cache_ttl_seconds: 300
 
-logging:
-  level: info
-  format: json
-
-metrics:
+events:
+  nats_url: nats://nats:4222
   enabled: true
-  port: 9091

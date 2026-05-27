@@ -1,30 +1,26 @@
-.PHONY: all build test lint generate clean docker run-standalone
+.PHONY: all install test lint format clean docker docker-up docker-down run dev
 
-BINARY := navigator-cli
-MODULE  := github.com/bastion/navigator
-CMD     := ./cmd/navigator-cli
+all: install
 
-all: generate build
+install:
+	pip install -e .
 
-build:
-	go build -ldflags="-s -w" -o bin/$(BINARY) $(CMD)
+install-dev:
+	pip install -e ".[dev]"
 
 test:
-	go test ./... -race -timeout 60s
+	pytest tests/ -v --timeout=60
 
 lint:
-	golangci-lint run ./...
+	ruff check navigator/ tests/
 
-# Requires buf (https://buf.build/docs/installation) or protoc with go plugins.
-generate:
-	@which buf > /dev/null 2>&1 && buf generate || \
-	 (echo "buf not found, trying protoc..." && \
-	  protoc --go_out=. --go_opt=paths=source_relative \
-	         --go-grpc_out=. --go-grpc_opt=paths=source_relative \
-	         proto/navigator/v1/navigator.proto)
+format:
+	ruff format navigator/ tests/
 
 clean:
-	rm -rf bin/ gen/
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	find . -name "*.pyc" -delete
+	rm -rf .pytest_cache dist *.egg-info
 
 docker:
 	docker build -t bastion/navigator:dev .
@@ -35,17 +31,10 @@ docker-up:
 docker-down:
 	docker compose down
 
-run-standalone:
-	go run $(CMD) server --standalone --port 8080
+run:
+	python -m navigator.main --config config/config.yaml
 
-run-server:
-	go run $(CMD) server --config config/config.yaml
+dev:
+	python -m navigator.main --config config/config.yaml
 
-# Quick interactive search without a running server.
-interactive:
-	go run $(CMD) interactive --standalone
-
-tidy:
-	go mod tidy
-
-.DEFAULT_GOAL := build
+.DEFAULT_GOAL := install

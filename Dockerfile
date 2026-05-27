@@ -1,13 +1,24 @@
-FROM golang:1.21-alpine AS builder
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/navigator-cli ./cmd/navigator-cli
+FROM python:3.11-slim AS base
 
-FROM alpine:3.19
-RUN apk add --no-cache ca-certificates curl
-COPY --from=builder /bin/navigator-cli /usr/local/bin/navigator-cli
-EXPOSE 8080 9090 9091
-ENTRYPOINT ["navigator-cli"]
-CMD ["server", "--config", "/etc/navigator/config.yaml"]
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/models/huggingface \
+    SENTENCE_TRANSFORMERS_HOME=/models/sentence-transformers
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir -e .
+
+COPY navigator/ ./navigator/
+COPY config/ ./config/
+
+EXPOSE 8082 9092
+
+ENTRYPOINT ["python", "-m", "navigator.main"]
+CMD ["--config", "/etc/navigator/config.yaml"]
