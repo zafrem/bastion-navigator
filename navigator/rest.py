@@ -11,8 +11,15 @@ from .events import (
     Publisher, extract_trace_context,
     event_search_started, event_search_completed, event_permission_filtered,
     event_honey_token_retrieved, event_federation_started, event_federation_completed,
+    event_embed_completed, event_batch_embed_completed, event_rerank_completed,
+    event_batch_search_completed, event_agent_generated,
 )
-from .hooks import HookManager, HookEvent, EVENT_HONEY_TOKEN_RETRIEVED, EVENT_SEARCH_COMPLETED
+from .hooks import (
+    HookManager, HookEvent,
+    EVENT_HONEY_TOKEN_RETRIEVED, EVENT_SEARCH_COMPLETED,
+    EVENT_EMBED_COMPLETED, EVENT_BATCH_EMBED_COMPLETED,
+    EVENT_RERANK_COMPLETED, EVENT_BATCH_SEARCH_COMPLETED, EVENT_AGENT_GENERATED,
+)
 from .models import (
     AgentGenerateRequest, AgentGenerateResponse,
     BatchEmbedRequest, BatchEmbedResponse, BatchSearchRequest, BatchSearchResponse,
@@ -121,27 +128,67 @@ def build_app(cfg: Config, orch: Orchestrator, pub: Publisher, hm: HookManager) 
         return search(req, request)
 
     @app.post("/v1/navigator/search/batch", response_model=BatchSearchResponse)
-    def batch_search(req: BatchSearchRequest):
+    def batch_search(req: BatchSearchRequest, request: Request):
+        tc = _tc(request)  # BatchSearchRequest has no user/tenant_id fields
+        import time as _time
         responses = [orch.search(q) for q in req.queries]
+        total = sum(len(r.results) for r in responses)
+        pub.publish(event_batch_search_completed(tc, len(req.queries), total))
+        hm.fire(HookEvent(
+            type=EVENT_BATCH_SEARCH_COMPLETED, tenant_id=tc.tenant_id,
+            trace_id=tc.trace_id, span_id=tc.span_id, request_id=req.request_id,
+            data={"query_count": len(req.queries), "total_results": total},
+        ))
         return BatchSearchResponse(request_id=req.request_id, results=responses)
 
     # ── embedding ───────────────────────────────────────────────────────────
 
     @app.post("/v1/navigator/embed", response_model=EmbedResponse)
-    def embed(req: EmbedRequest):
+    def embed(req: EmbedRequest, request: Request):
+        import time as _time
+        tc = _tc(request)  # EmbedRequest has no user/tenant_id fields
+        t0 = _time.perf_counter()
         vec = orch.embed(req.text)
+        dur = (_time.perf_counter() - t0) * 1000.0
+        pub.publish(event_embed_completed(tc, len(req.text), len(vec), dur))
+        hm.fire(HookEvent(
+            type=EVENT_EMBED_COMPLETED, tenant_id=tc.tenant_id,
+            trace_id=tc.trace_id, span_id=tc.span_id, request_id=req.request_id,
+            data={"text_length": len(req.text), "dim_count": len(vec), "duration_ms": dur},
+        ))
         return EmbedResponse(request_id=req.request_id, embedding=vec, dim_count=len(vec))
 
     @app.post("/v1/navigator/embed/batch", response_model=BatchEmbedResponse)
-    def embed_batch(req: BatchEmbedRequest):
+    def embed_batch(req: BatchEmbedRequest, request: Request):
+        import time as _time
+        tc = _tc(request)  # BatchEmbedRequest has no user/tenant_id fields
+        t0 = _time.perf_counter()
         vecs = orch.embed_batch(req.texts)
+        dur = (_time.perf_counter() - t0) * 1000.0
+        dim = len(vecs[0]) if vecs else 0
+        pub.publish(event_batch_embed_completed(tc, len(req.texts), dim, dur))
+        hm.fire(HookEvent(
+            type=EVENT_BATCH_EMBED_COMPLETED, tenant_id=tc.tenant_id,
+            trace_id=tc.trace_id, span_id=tc.span_id, request_id=req.request_id,
+            data={"text_count": len(req.texts), "dim_count": dim, "duration_ms": dur},
+        ))
         return BatchEmbedResponse(request_id=req.request_id, embeddings=vecs)
 
     # ── rerank ──────────────────────────────────────────────────────────────
 
     @app.post("/v1/navigator/rerank", response_model=RerankResponse)
-    def rerank(req: RerankRequest):
+    def rerank(req: RerankRequest, request: Request):
+        import time as _time
+        tc = _tc(request)  # RerankRequest has no user/tenant_id fields
+        t0 = _time.perf_counter()
         results = orch.rerank(req.query, req.candidates, req.top_k)
+        dur = (_time.perf_counter() - t0) * 1000.0
+        pub.publish(event_rerank_completed(tc, len(req.candidates), req.top_k or len(results), dur))
+        hm.fire(HookEvent(
+            type=EVENT_RERANK_COMPLETED, tenant_id=tc.tenant_id,
+            trace_id=tc.trace_id, span_id=tc.span_id, request_id=req.request_id,
+            data={"candidate_count": len(req.candidates), "top_k": req.top_k, "duration_ms": dur},
+        ))
         return RerankResponse(request_id=req.request_id, results=results)
 
     # ── collections ─────────────────────────────────────────────────────────
@@ -161,12 +208,17 @@ def build_app(cfg: Config, orch: Orchestrator, pub: Publisher, hm: HookManager) 
     # ── agent generate (agent mode only, doc 22 §5.1) ───────────────────────
 
     @app.post("/v1/navigator/agent/generate", response_model=AgentGenerateResponse)
-    def agent_generate(req: AgentGenerateRequest):
+    def agent_generate(req: AgentGenerateRequest, request: Request):
         """Generate a domain answer using the local LLM (agent mode only)."""
         if cfg.mode != "agent":
             from fastapi import HTTPException
             raise HTTPException(503, "agent mode is not enabled on this Navigator")
 
+        import time as _time
+        tc = _tc(request)  # AgentGenerateRequest has no user field
+        if req.tenant_id:
+            tc.tenant_id = req.tenant_id
+        t0 = _time.perf_counter()
         local_llm_cfg = cfg.agent.local_llm
         answer, sources, model_name, confidence = _call_local_llm(
             query=req.query,
@@ -174,6 +226,13 @@ def build_app(cfg: Config, orch: Orchestrator, pub: Publisher, hm: HookManager) 
             llm_cfg=local_llm_cfg,
             max_tokens=req.max_tokens,
         )
+        dur = (_time.perf_counter() - t0) * 1000.0
+        pub.publish(event_agent_generated(tc, "", model_name, confidence, dur))
+        hm.fire(HookEvent(
+            type=EVENT_AGENT_GENERATED, tenant_id=tc.tenant_id,
+            trace_id=tc.trace_id, span_id=tc.span_id,
+            data={"model": model_name, "confidence": confidence, "duration_ms": dur},
+        ))
         return AgentGenerateResponse(
             answer=answer,
             sources=sources,

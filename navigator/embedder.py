@@ -121,10 +121,10 @@ def build(cfg: EmbedderConfig) -> Embedder:
     """Construct an Embedder from config."""
     if cfg.type == "local":
         inner: Embedder = LocalEmbedder(cfg.model_name, cfg.max_length)
-    elif cfg.type == "http":
-        inner = BGEHttpEmbedder(cfg.endpoint, cfg.timeout)
+    elif cfg.type == "bge_http":
+        inner = BGEHttpEmbedder(cfg.endpoint)
     else:
-        inner = MockEmbedder(cfg.dims)
-    if cfg.cache_size > 0:
-        return CachedEmbedder(inner, cfg.cache_size)
+        inner = MockEmbedder()
+    if cfg.cache.enabled and cfg.cache.max_size > 0:
+        return CachedEmbedder(inner, cfg.cache.max_size)
     return inner

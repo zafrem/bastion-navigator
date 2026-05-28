@@ -47,15 +47,21 @@ class Orchestrator:
         collections = self._collections_for_categories(allowed)
 
         vec = self._embedder.embed(req.query)
+        over_fetch = opts.top_k * self._cfg.search_defaults.over_fetch_multiplier
         all_results: list[SearchResult] = []
         for col in collections:
-            results = self._search_collection(col, req.query, vec, filters, opts, opts.top_k * 3)
+            results = self._search_collection(col, req.query, vec, filters, opts, over_fetch)
             all_results.extend(results)
 
-        if opts.use_rerank and all_results:
+        total_candidates = len(all_results)
+        if opts.use_reranking and all_results:
             all_results = self._reranker.rerank(req.query, all_results, opts.top_k)
         else:
             all_results = _top_k(all_results, opts.top_k)
+
+        # Apply min_score filter after ranking.
+        if opts.min_score > 0:
+            all_results = [r for r in all_results if r.score >= opts.min_score]
 
         duration_ms = (time.perf_counter() - start) * 1000
         metrics.searches_total.labels(strategy=strategy, tenant_id=req.tenant_id).inc()
@@ -64,12 +70,15 @@ class Orchestrator:
             metrics.zero_result_searches.inc()
 
         return SearchResponse(
+            request_id=req.request_id,
             results=all_results,
             metadata=SearchMetadata(
                 strategy=strategy,
-                total_results=len(all_results),
-                processing_time_ms=duration_ms,
+                total_candidates=total_candidates,
+                filtered_out=total_candidates - len(all_results),
+                final_count=len(all_results),
             ),
+            processing_time_ms=duration_ms,
         )
 
     def embed(self, text: str) -> list[float]:
@@ -129,9 +138,9 @@ class Orchestrator:
             opts.vector_weight = d.vector_weight
         if not opts.bm25_weight:
             opts.bm25_weight = d.bm25_weight
-        if opts.use_rerank is None:
-            opts.use_rerank = d.use_rerank
-        if opts.use_hybrid is None:
+        if not opts.use_reranking:
+            opts.use_reranking = d.use_reranking
+        if not opts.use_hybrid:
             opts.use_hybrid = d.use_hybrid
         return opts
 
@@ -161,10 +170,10 @@ def _top_k(results: list[SearchResult], k: int) -> list[SearchResult]:
 
 
 def _strategy_name(opts: SearchOptions) -> str:
-    if opts.use_hybrid and opts.use_rerank:
+    if opts.use_hybrid and opts.use_reranking:
         return "hybrid+rerank"
     if opts.use_hybrid:
         return "hybrid"
-    if opts.use_rerank:
+    if opts.use_reranking:
         return "vector+rerank"
     return "vector"

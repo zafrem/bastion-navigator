@@ -8,9 +8,14 @@ from typing import Any, Callable
 
 log = logging.getLogger(__name__)
 
-EVENT_SEARCH_COMPLETED      = "search_completed"
-EVENT_HONEY_TOKEN_RETRIEVED = "honey_token_retrieved"
-EVENT_PERMISSION_FILTERED   = "permission_filtered"
+EVENT_SEARCH_COMPLETED        = "search_completed"
+EVENT_HONEY_TOKEN_RETRIEVED   = "honey_token_retrieved"
+EVENT_PERMISSION_FILTERED     = "permission_filtered"
+EVENT_EMBED_COMPLETED         = "embed_completed"
+EVENT_BATCH_EMBED_COMPLETED   = "batch_embed_completed"
+EVENT_RERANK_COMPLETED        = "rerank_completed"
+EVENT_BATCH_SEARCH_COMPLETED  = "batch_search_completed"
+EVENT_AGENT_GENERATED         = "agent_generated"
 
 
 @dataclass

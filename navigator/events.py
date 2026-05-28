@@ -145,6 +145,53 @@ def event_agent_generated(tc: TraceContext, peer_id: str, model: str, confidence
     return ev
 
 
+def event_embed_completed(tc: TraceContext, text_length: int, dim_count: int, duration_ms: float) -> NavigatorEvent:
+    """Emitted after a single-text embedding operation (SRS doc 22 lineage)."""
+    ev = _new_event(tc, "embed_completed", "info", "operational", {
+        "text_length": text_length,
+        "dim_count": dim_count,
+        "duration_ms": duration_ms,
+    })
+    ev.status = "completed"
+    ev.action_taken = "embed"
+    return ev
+
+
+def event_batch_embed_completed(tc: TraceContext, text_count: int, dim_count: int, duration_ms: float) -> NavigatorEvent:
+    """Emitted after a batch embedding operation (SRS doc 22 lineage)."""
+    ev = _new_event(tc, "batch_embed_completed", "info", "operational", {
+        "text_count": text_count,
+        "dim_count": dim_count,
+        "duration_ms": duration_ms,
+    })
+    ev.status = "completed"
+    ev.action_taken = "batch_embed"
+    return ev
+
+
+def event_rerank_completed(tc: TraceContext, candidate_count: int, top_k: int, duration_ms: float) -> NavigatorEvent:
+    """Emitted after a rerank operation (SRS doc 22 lineage)."""
+    ev = _new_event(tc, "rerank_completed", "info", "operational", {
+        "candidate_count": candidate_count,
+        "top_k": top_k,
+        "duration_ms": duration_ms,
+    })
+    ev.status = "completed"
+    ev.action_taken = "rerank"
+    return ev
+
+
+def event_batch_search_completed(tc: TraceContext, query_count: int, total_results: int) -> NavigatorEvent:
+    """Emitted after a batch search operation (SRS doc 22 lineage)."""
+    ev = _new_event(tc, "batch_search_completed", "info", "operational", {
+        "query_count": query_count,
+        "total_results": total_results,
+    })
+    ev.status = "completed"
+    ev.action_taken = "batch_search"
+    return ev
+
+
 def event_honey_token_retrieved(tc: TraceContext, token_id: str, document_id: str) -> NavigatorEvent:
     ev = _new_event(tc, "honey_token_retrieved", "critical", "security", {
         "honey_token_id": token_id,
