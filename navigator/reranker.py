@@ -70,6 +70,6 @@ class MockReranker(Reranker):
 def build(cfg: RerankerConfig) -> Reranker:
     if cfg.type == "local":
         return LocalReranker(cfg.model_name, cfg.max_length)
-    elif cfg.type == "http":
-        return BGEHttpReranker(cfg.endpoint, cfg.timeout)
+    elif cfg.type == "bge_http":
+        return BGEHttpReranker(cfg.endpoint)
     return MockReranker()

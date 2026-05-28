@@ -11,8 +11,17 @@ import grpc
 
 from .config import Config
 from .orchestrator import Orchestrator
-from .events import Publisher, TraceContext, event_search_started, event_search_completed, event_permission_filtered, event_honey_token_retrieved
-from .hooks import HookManager, HookEvent, EVENT_HONEY_TOKEN_RETRIEVED
+from .events import (
+    Publisher, TraceContext,
+    event_search_started, event_search_completed, event_permission_filtered,
+    event_honey_token_retrieved, event_embed_completed, event_batch_embed_completed,
+    event_rerank_completed, event_batch_search_completed,
+)
+from .hooks import (
+    HookManager, HookEvent,
+    EVENT_HONEY_TOKEN_RETRIEVED, EVENT_EMBED_COMPLETED, EVENT_BATCH_EMBED_COMPLETED,
+    EVENT_RERANK_COMPLETED, EVENT_BATCH_SEARCH_COMPLETED,
+)
 from .models import BatchEmbedRequest, BatchSearchRequest, CollectionsResponse, EmbedRequest, RerankRequest, SearchOptions, SearchRequest
 
 log = logging.getLogger(__name__)
@@ -97,14 +106,30 @@ class _NavigatorServiceHandler(grpc.GenericRpcHandler):
                 ))
 
     def _search(self, req_bytes: bytes, ctx) -> bytes:
+        import time as _time
         tc = _tc_from_context(ctx)
         req = SearchRequest.model_validate(_deserialize(req_bytes))
+        self._pub.publish(event_search_started(tc, req.query, "grpc"))
         resp = self._orch.search(req)
+        self._pub.publish(event_search_completed(tc, len(resp.results), resp.metadata.filtered_out, resp.processing_time_ms))
+        if resp.metadata.filtered_out > 0:
+            cats = req.user.allowed_categories if req.user else []
+            self._pub.publish(event_permission_filtered(tc, resp.metadata.total_candidates, resp.metadata.filtered_out, cats))
         self._fire_honey_tokens(resp, tc)
         return _serialize(resp)
 
     def _search_with_permissions(self, req_bytes: bytes, ctx) -> bytes:
-        return self._search(req_bytes, ctx)
+        import time as _time
+        tc = _tc_from_context(ctx)
+        req = SearchRequest.model_validate(_deserialize(req_bytes))
+        self._pub.publish(event_search_started(tc, req.query, "permissions"))
+        resp = self._orch.search(req)
+        self._pub.publish(event_search_completed(tc, len(resp.results), resp.metadata.filtered_out, resp.processing_time_ms))
+        if resp.metadata.filtered_out > 0:
+            cats = req.user.allowed_categories if req.user else []
+            self._pub.publish(event_permission_filtered(tc, resp.metadata.total_candidates, resp.metadata.filtered_out, cats))
+        self._fire_honey_tokens(resp, tc)
+        return _serialize(resp)
 
     def _hybrid_search(self, req_bytes: bytes, ctx) -> bytes:
         tc = _tc_from_context(ctx)
@@ -112,29 +137,73 @@ class _NavigatorServiceHandler(grpc.GenericRpcHandler):
         if req.options is None:
             req.options = SearchOptions()
         req.options.use_hybrid = True
+        self._pub.publish(event_search_started(tc, req.query, "hybrid"))
         resp = self._orch.search(req)
+        self._pub.publish(event_search_completed(tc, len(resp.results), resp.metadata.filtered_out, resp.processing_time_ms))
+        if resp.metadata.filtered_out > 0:
+            cats = req.user.allowed_categories if req.user else []
+            self._pub.publish(event_permission_filtered(tc, resp.metadata.total_candidates, resp.metadata.filtered_out, cats))
         self._fire_honey_tokens(resp, tc)
         return _serialize(resp)
 
     def _batch_search(self, req_bytes: bytes, ctx) -> bytes:
+        tc = _tc_from_context(ctx)
         data = _deserialize(req_bytes)
         req = BatchSearchRequest.model_validate(data)
-        results = [self._orch.search(r) for r in req.requests]
+        results = [self._orch.search(r) for r in req.queries]
+        total = sum(len(r.results) for r in results)
+        self._pub.publish(event_batch_search_completed(tc, len(req.queries), total))
+        self._hm.fire(HookEvent(
+            type=EVENT_BATCH_SEARCH_COMPLETED, tenant_id=tc.tenant_id,
+            trace_id=tc.trace_id, span_id=tc.span_id,
+            data={"query_count": len(req.queries), "total_results": total},
+        ))
         return _serialize({"responses": [r.model_dump() for r in results]})
 
     def _embed(self, req_bytes: bytes, ctx) -> bytes:
+        import time as _time
+        tc = _tc_from_context(ctx)
         req = EmbedRequest.model_validate(_deserialize(req_bytes))
+        t0 = _time.perf_counter()
         vec = self._orch.embed(req.text)
+        dur = (_time.perf_counter() - t0) * 1000.0
+        self._pub.publish(event_embed_completed(tc, len(req.text), len(vec), dur))
+        self._hm.fire(HookEvent(
+            type=EVENT_EMBED_COMPLETED, tenant_id=tc.tenant_id,
+            trace_id=tc.trace_id, span_id=tc.span_id,
+            data={"text_length": len(req.text), "dim_count": len(vec), "duration_ms": dur},
+        ))
         return _serialize({"embedding": vec})
 
     def _batch_embed(self, req_bytes: bytes, ctx) -> bytes:
+        import time as _time
+        tc = _tc_from_context(ctx)
         req = BatchEmbedRequest.model_validate(_deserialize(req_bytes))
+        t0 = _time.perf_counter()
         vecs = self._orch.embed_batch(req.texts)
+        dur = (_time.perf_counter() - t0) * 1000.0
+        dim = len(vecs[0]) if vecs else 0
+        self._pub.publish(event_batch_embed_completed(tc, len(req.texts), dim, dur))
+        self._hm.fire(HookEvent(
+            type=EVENT_BATCH_EMBED_COMPLETED, tenant_id=tc.tenant_id,
+            trace_id=tc.trace_id, span_id=tc.span_id,
+            data={"text_count": len(req.texts), "dim_count": dim, "duration_ms": dur},
+        ))
         return _serialize({"embeddings": vecs})
 
     def _rerank(self, req_bytes: bytes, ctx) -> bytes:
+        import time as _time
+        tc = _tc_from_context(ctx)
         req = RerankRequest.model_validate(_deserialize(req_bytes))
+        t0 = _time.perf_counter()
         results = self._orch.rerank(req.query, req.candidates, req.top_k)
+        dur = (_time.perf_counter() - t0) * 1000.0
+        self._pub.publish(event_rerank_completed(tc, len(req.candidates), req.top_k or len(results), dur))
+        self._hm.fire(HookEvent(
+            type=EVENT_RERANK_COMPLETED, tenant_id=tc.tenant_id,
+            trace_id=tc.trace_id, span_id=tc.span_id,
+            data={"candidate_count": len(req.candidates), "top_k": req.top_k, "duration_ms": dur},
+        ))
         return _serialize({"results": [r.model_dump() for r in results]})
 
     def _get_collections(self, _req: bytes, ctx) -> bytes:
