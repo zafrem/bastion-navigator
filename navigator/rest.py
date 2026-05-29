@@ -23,8 +23,9 @@ from .hooks import (
 from .models import (
     AgentGenerateRequest, AgentGenerateResponse,
     BatchEmbedRequest, BatchEmbedResponse, BatchSearchRequest, BatchSearchResponse,
-    CollectionsResponse, EmbedRequest, EmbedResponse, HealthStatus, RerankRequest,
-    RerankResponse, SearchOptions, SearchRequest, SearchResponse,
+    CollectionsResponse, EmbedRequest, EmbedResponse, HealthStatus,
+    IndexRequest, IndexResponse,
+    RerankRequest, RerankResponse, SearchOptions, SearchRequest, SearchResponse,
 )
 
 import logging
@@ -190,6 +191,12 @@ def build_app(cfg: Config, orch: Orchestrator, pub: Publisher, hm: HookManager) 
             data={"candidate_count": len(req.candidates), "top_k": req.top_k, "duration_ms": dur},
         ))
         return RerankResponse(request_id=req.request_id, results=results)
+
+    # ── index (ingest) ──────────────────────────────────────────────────────
+
+    @app.post("/v1/navigator/index", response_model=IndexResponse)
+    def index_document(req: IndexRequest):
+        return orch.index_document(req)
 
     # ── collections ─────────────────────────────────────────────────────────
 
