@@ -192,6 +192,92 @@ def event_batch_search_completed(tc: TraceContext, query_count: int, total_resul
     return ev
 
 
+def event_query_routed(
+    tc: TraceContext,
+    intent: str,
+    strategy: str,
+    collections: list[str],
+    excluded: list[str],
+    confidence: float,
+    routing_ms: float,
+) -> NavigatorEvent:
+    """Emitted after each routing decision (MR-01, FR-MR-01-004)."""
+    ev = _new_event(tc, "query_routed", "info", "operational", {
+        "intent": intent,
+        "strategy": strategy,
+        "collections": collections,
+        "excluded": excluded,
+        "confidence": round(confidence, 3),
+        "routing_ms": round(routing_ms, 2),
+    })
+    ev.status = "routed"
+    ev.action_taken = "route"
+    return ev
+
+
+def event_search_iteration(
+    tc: TraceContext,
+    iteration: int,
+    verdict: str,
+    top_score: float,
+    coverage: float,
+    refinement: Optional[str],
+    iteration_ms: float,
+) -> NavigatorEvent:
+    """Emitted after each re-search loop iteration (MR-03, FR-MR-03-004)."""
+    ev = _new_event(tc, "search_iteration", "info", "operational", {
+        "iteration": iteration,
+        "verdict": verdict,
+        "top_score": round(top_score, 4),
+        "coverage": round(coverage, 4),
+        "refinement": refinement,
+        "iteration_ms": round(iteration_ms, 2),
+    })
+    ev.status = verdict
+    ev.action_taken = "search_iteration"
+    return ev
+
+
+def event_loop_completed(
+    tc: TraceContext,
+    total_iterations: int,
+    termination: str,
+    final_result_count: int,
+    total_ms: float,
+) -> NavigatorEvent:
+    """Emitted when the re-search loop finishes (MR-03, FR-MR-03-004)."""
+    ev = _new_event(tc, "loop_completed", "info", "operational", {
+        "total_iterations": total_iterations,
+        "termination": termination,
+        "final_result_count": final_result_count,
+        "total_ms": round(total_ms, 2),
+    })
+    ev.status = "completed"
+    ev.action_taken = "search_loop"
+    return ev
+
+
+def event_chunk_retrieved(
+    tc: TraceContext,
+    chunk_id: str,
+    document_id: str,
+    score: float,
+    rank: int,
+    collection: str = "",
+) -> NavigatorEvent:
+    """Emitted once per returned chunk for data lineage tracking (MR-05-001)."""
+    ev = _new_event(tc, "chunk_retrieved", "info", "lineage", {
+        "chunk_id": chunk_id,
+        "document_id": document_id,
+        "score": round(score, 4),
+        "rank": rank,
+        "collection": collection,
+    })
+    ev.status = "retrieved"
+    ev.action_taken = "retrieve"
+    return ev
+
+
 def event_honey_token_retrieved(tc: TraceContext, token_id: str, document_id: str) -> NavigatorEvent:
     ev = _new_event(tc, "honey_token_retrieved", "critical", "security", {
         "honey_token_id": token_id,

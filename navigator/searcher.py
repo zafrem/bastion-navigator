@@ -20,13 +20,23 @@ def _build_filter(filters: dict[str, str]) -> dict:
     return {"must": conditions} if conditions else {}
 
 
+_PROVENANCE_KEYS = frozenset({
+    "content", "document_id", "chunk_id", "heading_path",
+    "char_start", "char_end", "last_indexed",
+})
+
 def _to_search_result(hit) -> SearchResult:
     payload = hit.payload or {}
     return SearchResult(
         document_id=payload.get("document_id", str(hit.id)),
         content=payload.get("content", ""),
         score=hit.score,
-        metadata={k: v for k, v in payload.items() if k not in ("content", "document_id")},
+        chunk_id=payload.get("chunk_id", ""),
+        heading_path=payload.get("heading_path", ""),
+        char_start=int(payload["char_start"]) if payload.get("char_start") is not None else 0,
+        char_end=int(payload["char_end"]) if payload.get("char_end") is not None else 0,
+        last_indexed=payload.get("last_indexed", ""),
+        metadata={k: v for k, v in payload.items() if k not in _PROVENANCE_KEYS},
     )
 
 
@@ -98,6 +108,24 @@ class QdrantSearcher:
         cols = self._client.get_collections().collections
         return [CollectionInfo(name=c.name) for c in cols]
 
+    def ensure_collection(self, name: str, vector_size: int = 768) -> None:
+        from qdrant_client.models import VectorParams, Distance  # type: ignore
+        if not self._client.collection_exists(name):
+            self._client.create_collection(
+                collection_name=name,
+                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+            )
+
+    def upsert(self, collection: str, points: list[dict]) -> None:
+        from qdrant_client.models import PointStruct  # type: ignore
+        self._client.upsert(
+            collection_name=collection,
+            points=[
+                PointStruct(id=p["id"], vector=p["vector"], payload=p["payload"])
+                for p in points
+            ],
+        )
+
 
 class MockSearcher:
     """In-memory mock searcher for tests."""
@@ -110,3 +138,9 @@ class MockSearcher:
 
     def collections(self) -> list[CollectionInfo]:
         return []
+
+    def ensure_collection(self, name: str, vector_size: int = 768) -> None:
+        pass
+
+    def upsert(self, collection: str, points: list[dict]) -> None:
+        pass

@@ -14,6 +14,9 @@ from .reranker import build as build_reranker
 from .searcher import QdrantSearcher, MockSearcher
 from .vault_client import VaultClient, NoopVaultClient
 from .orchestrator import Orchestrator
+from .token_rewriter import TokenRewriter
+from .router import Router
+from .evaluator import Evaluator
 from .federation import (
     FederationConfig as _FedCfg,
     PeerConfig as _PeerCfg,
@@ -58,7 +61,13 @@ def main() -> None:
 
     vault = VaultClient(cfg.vault.endpoint) if cfg.vault.enabled else NoopVaultClient()
 
-    base_orch = Orchestrator(cfg, embedder, searcher, reranker, vault)
+    pub = Publisher(cfg.events.nats_url)
+    rewriter = TokenRewriter()
+    base_orch = Orchestrator(cfg, embedder, searcher, reranker, vault, rewriter=rewriter, publisher=pub)
+
+    if cfg.modular_rag.enabled:
+        base_orch.configure_modular_rag(Router(), Evaluator())
+        log.info("[navigator] modular RAG enabled (max_iterations=%d)", cfg.modular_rag.loop.max_iterations)
 
     # Build orchestrator based on mode
     if cfg.mode in ("federation", "agent") and cfg.federation.peers:
@@ -86,7 +95,6 @@ def main() -> None:
         orch = base_orch
         log.info("[navigator] mode=search (standalone)")
 
-    pub = Publisher(cfg.events.nats_url)
     hm = HookManager()
 
     # gRPC in background thread

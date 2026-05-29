@@ -98,6 +98,44 @@ def cmd_health(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_index(args: argparse.Namespace) -> int:
+    """Chunk and index documents from a JSONL file into a running Navigator server."""
+    import json as _json
+
+    records = []
+    with open(args.file) as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                records.append(_json.loads(line))
+
+    if not records:
+        print("No documents found in file.", file=sys.stderr)
+        return 1
+
+    total_chunks = 0
+    for doc in records:
+        payload: dict[str, Any] = {
+            "document_id": doc.get("document_id", ""),
+            "tenant_id": doc.get("tenant_id", args.tenant or ""),
+            "category": doc.get("category", args.collection or ""),
+            "title": doc.get("title", ""),
+            "content": doc.get("content", ""),
+            "metadata": doc.get("metadata", {}),
+        }
+        if args.collection:
+            payload["category"] = args.collection
+        result = _api_post(args.api, "/v1/navigator/index", payload)
+        n = result.get("chunk_count", 0)
+        total_chunks += n
+        if not args.quiet:
+            print(f"  {payload['document_id']!r:30s}  →  {n} chunk(s)")
+
+    if not args.quiet:
+        print(f"\nTotal: {len(records)} doc(s), {total_chunks} chunk(s) indexed")
+    return 0
+
+
 def cmd_collections(args: argparse.Namespace) -> int:
     """List available Qdrant collections."""
     result = _api_get(args.api, "/v1/navigator/collections")
@@ -147,6 +185,15 @@ def _build_parser() -> argparse.ArgumentParser:
     h.add_argument("--api", default="http://localhost:8082", help="Navigator API base URL")
     h.add_argument("--json", action="store_true", help="Output raw JSON")
     h.set_defaults(func=cmd_health)
+
+    # index
+    idx = sub.add_parser("index", help="Chunk and index documents from a JSONL file")
+    idx.add_argument("--file", "-f", required=True, help="Path to JSONL file (one doc per line)")
+    idx.add_argument("--tenant", "-t", default="", help="Tenant ID (overrides per-document tenant_id)")
+    idx.add_argument("--collection", "-c", default="", help="Collection name (overrides per-document category)")
+    idx.add_argument("--quiet", "-q", action="store_true", help="Suppress per-document output")
+    idx.add_argument("--api", default="http://localhost:8082", help="Navigator API base URL")
+    idx.set_defaults(func=cmd_index)
 
     # collections
     col = sub.add_parser("collections", help="List available collections")

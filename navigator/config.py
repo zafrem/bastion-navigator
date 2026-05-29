@@ -99,6 +99,24 @@ class FederationConfig(BaseModel):
     peers: list[PeerConfig] = Field(default_factory=list)
 
 
+class LoopConfig(BaseModel):
+    max_iterations: int = 3
+    loop_timeout_ms: float = 500.0
+    quality_threshold: float = 0.60
+    coverage_threshold: float = 0.40
+    uncertain_low: float = 0.45
+
+
+class RouterConfig(BaseModel):
+    routing_threshold: float = 0.25
+
+
+class ModularRAGConfig(BaseModel):
+    enabled: bool = False          # opt-in; linear path when False
+    loop: LoopConfig = Field(default_factory=LoopConfig)
+    router: RouterConfig = Field(default_factory=RouterConfig)
+
+
 class LocalLLMConfig(BaseModel):
     provider: str = "ollama"             # "ollama" | "llamacpp" | "custom_http"
     endpoint: str = "http://localhost:11434"
@@ -125,6 +143,7 @@ class Config(BaseModel):
     events: EventsConfig = Field(default_factory=EventsConfig)
     federation: FederationConfig = Field(default_factory=FederationConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    modular_rag: ModularRAGConfig = Field(default_factory=ModularRAGConfig)
 
     @classmethod
     def load(cls, path: str) -> "Config":

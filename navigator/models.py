@@ -21,6 +21,7 @@ class SearchOptions(BaseModel):
     filters: dict[str, str] = Field(default_factory=dict)
     min_score: float = 0.0
     timeout_ms: int = 0
+    strategy: str = ""          # override router selection (MR-01)
 
 
 class SearchRequest(BaseModel):
@@ -40,6 +41,12 @@ class SearchResult(BaseModel):
     rerank_score: float = 0.0
     metadata: dict[str, str] = Field(default_factory=dict)
     category: str = ""
+    # MR-05-002: source attribution provenance fields
+    chunk_id: str = ""
+    heading_path: str = ""
+    char_start: int = 0
+    char_end: int = 0
+    last_indexed: str = ""
 
 
 class SearchMetadata(BaseModel):
@@ -121,6 +128,21 @@ class ErrorResponse(BaseModel):
     error: str
     code: int
     trace_id: str = ""
+
+
+class IndexRequest(BaseModel):
+    document_id: str
+    tenant_id: str = ""
+    category: str = ""
+    title: str = ""
+    content: str
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class IndexResponse(BaseModel):
+    document_id: str
+    chunk_count: int
+    chunk_ids: list[str] = Field(default_factory=list)
 
 
 # ─── Federation / Agent models (doc 22) ──────────────────────────────────────
