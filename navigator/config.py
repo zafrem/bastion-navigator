@@ -111,10 +111,24 @@ class RouterConfig(BaseModel):
     routing_threshold: float = 0.25
 
 
+class HyDEConfig(BaseModel):
+    enabled: bool = False          # MR-02-002: opt-in
+    max_words: int = 12            # only activate for queries shorter than this
+    timeout_ms: float = 2000.0     # timeout for LLM-based hypothetical generation
+    llm_endpoint: str = ""         # if set, call a local LLM (Ollama-compatible); else use template
+
+
+class StalenessConfig(BaseModel):
+    enabled: bool = True
+    threshold_days: int = 7        # MR-05-004: chunks older than this are flagged
+
+
 class ModularRAGConfig(BaseModel):
     enabled: bool = False          # opt-in; linear path when False
     loop: LoopConfig = Field(default_factory=LoopConfig)
     router: RouterConfig = Field(default_factory=RouterConfig)
+    hyde: HyDEConfig = Field(default_factory=HyDEConfig)
+    staleness: StalenessConfig = Field(default_factory=StalenessConfig)
 
 
 class LocalLLMConfig(BaseModel):
