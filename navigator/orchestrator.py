@@ -13,6 +13,7 @@ from .vault_client import VaultClient, NoopVaultClient
 from .token_rewriter import TokenRewriter
 from .router import Router, RoutingDecision
 from .evaluator import Evaluator, EvaluatorConfig, QualityVerdict
+from .hyde import HyDETransformer
 from .models import (
     IndexRequest, IndexResponse,
     SearchOptions, SearchRequest, SearchResponse, SearchResult, SearchMetadata,
@@ -21,6 +22,7 @@ from .events import (
     Publisher, TraceContext,
     event_chunk_retrieved, event_query_routed,
     event_search_iteration, event_loop_completed,
+    event_purpose_filtered, event_chunk_stale, event_query_transformed,
 )
 from . import metrics
 
@@ -52,11 +54,18 @@ class Orchestrator:
         self._publisher = publisher
         self._router: Optional[Router] = None
         self._evaluator: Optional[Evaluator] = None
+        self._hyde: Optional[HyDETransformer] = None
 
     def configure_modular_rag(self, router: Router, evaluator: Evaluator) -> None:
-        """Enable Modular RAG components (MR-01/03). Called from main.py when enabled."""
+        """Enable Modular RAG components (MR-01/03/02/04/05). Called from main.py when enabled."""
         self._router = router
         self._evaluator = evaluator
+        hyde_cfg = self._cfg.modular_rag.hyde
+        if hyde_cfg.enabled:
+            self._hyde = HyDETransformer(
+                llm_endpoint=hyde_cfg.llm_endpoint,
+                timeout_ms=hyde_cfg.timeout_ms,
+            )
 
     def search(self, req: SearchRequest, trace_context: Optional[TraceContext] = None, **kwargs) -> SearchResponse:
         start = time.perf_counter()
@@ -86,10 +95,46 @@ class Orchestrator:
             and mr_cfg.loop.max_iterations > 1
         )
 
+        # MR-04-002: raise CRITICAL event if purpose=training_data (requires human review).
+        if req.purpose == "training_data" and self._publisher:
+            from .events import _new_event
+            ev = _new_event(tc, "training_data_access_requested", "critical", "security", {
+                "declared_purpose": req.purpose,
+                "tenant_id": req.tenant_id,
+            })
+            ev.status = "alert"
+            ev.action_taken = "alert_raised"
+            self._publisher.publish(ev)
+
         # MR-02-001 applied to query: rewrite tokens before embedding.
         query_for_embed = (
             self._rewriter.rewrite_text(req.query) if self._rewriter else req.query
         )
+
+        # MR-02-002: HyDE — replace query embedding with hypothetical document embedding.
+        hyde_used = False
+        if self._hyde is not None and opts.use_hyde or (
+            self._hyde is not None
+            and self._cfg.modular_rag.enabled
+            and self._cfg.modular_rag.hyde.enabled
+        ):
+            routing_intent = "ambiguous"
+            if self._router:
+                _rd = self._router.route(query_for_embed, [], strategy_override="")
+                routing_intent = _rd.intent.value
+            hyde_cfg = self._cfg.modular_rag.hyde
+            if self._hyde.should_apply(query_for_embed, routing_intent, hyde_cfg.max_words):
+                t_hyde = time.perf_counter()
+                hyp = self._hyde.generate(query_for_embed, routing_intent)
+                hyde_ms = (time.perf_counter() - t_hyde) * 1000
+                if hyp != query_for_embed:
+                    hyde_used = True
+                    if self._publisher:
+                        self._publisher.publish(event_query_transformed(
+                            tc, "hyde",
+                            len(query_for_embed), len(hyp), hyde_ms,
+                        ))
+                    query_for_embed = hyp
 
         # MR-03: Re-search loop (single pass when loop is disabled).
         best_results: list[SearchResult] = []
@@ -129,6 +174,17 @@ class Orchestrator:
                 iter_results = self._reranker.rerank(current_embedded, iter_results, opts.top_k)
             else:
                 iter_results = _top_k(iter_results, opts.top_k)
+
+            # MR-04-002: purpose pre-filter — exclude results whose permitted_purposes
+            # does not include the declared purpose.
+            if req.purpose:
+                iter_results, purpose_excluded = _filter_by_purpose(iter_results, req.purpose)
+                if purpose_excluded and self._publisher:
+                    for r in purpose_excluded:
+                        pp = r.metadata.get("permitted_purposes", "").split(",")
+                        self._publisher.publish(
+                            event_purpose_filtered(tc, r.document_id, req.purpose, pp)
+                        )
 
             # Circuit breaker: identical result set as previous iteration.
             doc_ids = sorted(r.document_id for r in iter_results)
@@ -181,6 +237,11 @@ class Orchestrator:
 
         all_results = best_results
         strategy = _strategy_name(opts)
+
+        # MR-05-004: staleness check — flag chunks older than staleness_threshold_days.
+        stale_cfg = self._cfg.modular_rag.staleness
+        if stale_cfg.enabled and all_results:
+            all_results = _check_staleness(all_results, stale_cfg.threshold_days, tc, self._publisher)
 
         # Apply min_score filter after ranking.
         if opts.min_score > 0:
@@ -297,6 +358,7 @@ class Orchestrator:
                     "char_start": chunk.char_start,
                     "char_end": chunk.char_end,
                     "last_indexed": last_indexed,
+                    "permitted_purposes": ",".join(req.permitted_purposes),
                     "content": chunk.content,
                     **{k: v for k, v in req.metadata.items()},
                 },
@@ -383,6 +445,65 @@ def _rrf(
 
 def _top_k(results: list[SearchResult], k: int) -> list[SearchResult]:
     return sorted(results, key=lambda r: r.score, reverse=True)[:k]
+
+
+def _filter_by_purpose(
+    results: list[SearchResult],
+    purpose: str,
+) -> tuple[list[SearchResult], list[SearchResult]]:
+    """Split results into (allowed, excluded) by purpose pre-filter (MR-04-002).
+
+    A result is allowed when:
+    - purpose is empty (no declared purpose → allow all), OR
+    - no permitted_purposes set on the document (backwards-compatible → allow all), OR
+    - the declared purpose appears in the comma-separated permitted_purposes metadata.
+    """
+    if not purpose:
+        return list(results), []
+    allowed: list[SearchResult] = []
+    excluded: list[SearchResult] = []
+    for r in results:
+        pp_str = r.metadata.get("permitted_purposes", "")
+        if not pp_str or purpose in pp_str.split(","):
+            allowed.append(r)
+        else:
+            excluded.append(r)
+    return allowed, excluded
+
+
+def _check_staleness(
+    results: list[SearchResult],
+    threshold_days: int,
+    tc,
+    publisher,
+) -> list[SearchResult]:
+    """Flag results whose last_indexed exceeds threshold_days; return updated list (MR-05-004)."""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    threshold = timedelta(days=threshold_days)
+    updated: list[SearchResult] = []
+    for r in results:
+        if not r.last_indexed:
+            updated.append(r)
+            continue
+        try:
+            li = datetime.fromisoformat(r.last_indexed.replace("Z", "+00:00"))
+            age = now - li
+            if age > threshold:
+                days_stale = age.days
+                new_meta = dict(r.metadata)
+                new_meta["stale"] = "true"
+                new_meta["days_stale"] = str(days_stale)
+                r = r.model_copy(update={"metadata": new_meta})
+                if publisher:
+                    from .events import event_chunk_stale
+                    publisher.publish(
+                        event_chunk_stale(tc, r.chunk_id, r.document_id, r.last_indexed, days_stale)
+                    )
+        except (ValueError, TypeError, AttributeError):
+            pass
+        updated.append(r)
+    return updated
 
 
 def _merge_best(

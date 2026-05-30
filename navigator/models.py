@@ -22,6 +22,7 @@ class SearchOptions(BaseModel):
     min_score: float = 0.0
     timeout_ms: int = 0
     strategy: str = ""          # override router selection (MR-01)
+    use_hyde: bool = False      # HyDE embedding for short factual/procedural queries (MR-02-002)
 
 
 class SearchRequest(BaseModel):
@@ -30,6 +31,7 @@ class SearchRequest(BaseModel):
     query: str
     user: Optional[UserContext] = None
     options: Optional[SearchOptions] = None
+    purpose: str = "customer_support"   # MR-04-002: declared access purpose
 
 
 class SearchResult(BaseModel):
@@ -130,6 +132,16 @@ class ErrorResponse(BaseModel):
     trace_id: str = ""
 
 
+PERMITTED_PURPOSES = [
+    "customer_support",
+    "audit",
+    "hr_analytics",
+    "product_development",
+    "legal",
+    "training_data",
+]
+
+
 class IndexRequest(BaseModel):
     document_id: str
     tenant_id: str = ""
@@ -137,6 +149,9 @@ class IndexRequest(BaseModel):
     title: str = ""
     content: str
     metadata: dict[str, str] = Field(default_factory=dict)
+    permitted_purposes: list[str] = Field(
+        default_factory=lambda: ["customer_support"]
+    )  # MR-04-001: which purposes may access this document
 
 
 class IndexResponse(BaseModel):

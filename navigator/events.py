@@ -192,6 +192,63 @@ def event_batch_search_completed(tc: TraceContext, query_count: int, total_resul
     return ev
 
 
+def event_query_transformed(
+    tc: TraceContext,
+    transformation_type: str,
+    original_length: int,
+    transformed_length: int,
+    transformation_ms: float,
+    sub_query_count: int = 0,
+) -> NavigatorEvent:
+    """Emitted after each query transformation step (MR-02, FR-MR-02-004)."""
+    ev = _new_event(tc, "query_transformed", "info", "operational", {
+        "transformation_type": transformation_type,
+        "original_length": original_length,
+        "transformed_length": transformed_length,
+        "sub_query_count": sub_query_count,
+        "transformation_ms": round(transformation_ms, 2),
+    })
+    ev.status = "transformed"
+    ev.action_taken = transformation_type
+    return ev
+
+
+def event_purpose_filtered(
+    tc: TraceContext,
+    document_id: str,
+    declared_purpose: str,
+    permitted_purposes: list[str],
+) -> NavigatorEvent:
+    """Emitted when a result is excluded due to purpose mismatch (MR-04-005)."""
+    ev = _new_event(tc, "purpose_filtered", "info", "security", {
+        "document_id": document_id,
+        "declared_purpose": declared_purpose,
+        "permitted_purposes": permitted_purposes,
+    })
+    ev.status = "filtered"
+    ev.action_taken = "purpose_filter"
+    return ev
+
+
+def event_chunk_stale(
+    tc: TraceContext,
+    chunk_id: str,
+    document_id: str,
+    last_indexed: str,
+    days_stale: int,
+) -> NavigatorEvent:
+    """Emitted when a retrieved chunk exceeds the staleness threshold (MR-05-004)."""
+    ev = _new_event(tc, "chunk_stale", "warning", "lineage", {
+        "chunk_id": chunk_id,
+        "document_id": document_id,
+        "last_indexed": last_indexed,
+        "days_stale": days_stale,
+    })
+    ev.status = "stale"
+    ev.action_taken = "staleness_flag"
+    return ev
+
+
 def event_query_routed(
     tc: TraceContext,
     intent: str,
