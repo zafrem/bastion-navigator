@@ -335,6 +335,71 @@ def event_chunk_retrieved(
     return ev
 
 
+def event_document_reindexed(
+    tc: TraceContext,
+    document_id: str,
+    collection: str,
+    old_chunk_count: int,
+    new_chunk_count: int,
+    changed_sections: list[str],
+    reindex_ms: float,
+) -> NavigatorEvent:
+    """Emitted when delta indexing replaces existing chunks (MR-06-002)."""
+    ev = _new_event(tc, "document_reindexed", "info", "operational", {
+        "document_id": document_id,
+        "collection": collection,
+        "old_chunk_count": old_chunk_count,
+        "new_chunk_count": new_chunk_count,
+        "changed_sections": changed_sections,
+        "reindex_ms": round(reindex_ms, 2),
+    })
+    ev.status = "reindexed"
+    ev.action_taken = "delta_reindex"
+    return ev
+
+
+def event_sub_queries_decomposed(
+    tc: TraceContext,
+    original_query_len: int,
+    sub_query_count: int,
+    strategy: str,
+    decompose_ms: float,
+) -> NavigatorEvent:
+    """Emitted when a multi-hop query is decomposed into sub-queries (MR-02-003)."""
+    ev = _new_event(tc, "query_transformed", "info", "operational", {
+        "transformation_type": "decompose",
+        "original_length": original_query_len,
+        "transformed_length": original_query_len,
+        "sub_query_count": sub_query_count,
+        "strategy": strategy,
+        "transformation_ms": round(decompose_ms, 2),
+    })
+    ev.status = "transformed"
+    ev.action_taken = "decompose"
+    return ev
+
+
+def event_steward_purposes_updated(
+    tc: TraceContext,
+    document_id: str,
+    collection: str,
+    steward_user_id: str,
+    old_purposes: list[str],
+    new_purposes: list[str],
+) -> NavigatorEvent:
+    """Emitted when a data steward updates permitted_purposes (MR-04-004)."""
+    ev = _new_event(tc, "steward_purposes_updated", "info", "audit", {
+        "document_id": document_id,
+        "collection": collection,
+        "steward_user_id": steward_user_id,
+        "old_purposes": old_purposes,
+        "new_purposes": new_purposes,
+    })
+    ev.status = "updated"
+    ev.action_taken = "steward_update"
+    return ev
+
+
 def event_honey_token_retrieved(tc: TraceContext, token_id: str, document_id: str) -> NavigatorEvent:
     ev = _new_event(tc, "honey_token_retrieved", "critical", "security", {
         "honey_token_id": token_id,

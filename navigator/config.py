@@ -143,6 +143,22 @@ class AgentConfig(BaseModel):
     local_llm: LocalLLMConfig = Field(default_factory=LocalLLMConfig)
 
 
+class ConnectorConfig(BaseModel):
+    enabled: bool = False
+    type: str = "jsonl"           # "jsonl" | "directory" | "rest"
+    path: str = ""                # jsonl file path or directory path
+    endpoint: str = ""            # REST pull endpoint base URL
+    auth_header: str = ""         # Authorization header value (from Vault KMS)
+    category: str = ""            # data category for indexed documents
+    timeout_seconds: float = 10.0
+    poll_interval_seconds: int = 300  # for REST pull; 0 = no auto-poll
+
+
+class DecomposerConfig(BaseModel):
+    enabled: bool = True
+    max_sub_queries: int = 4
+
+
 class Config(BaseModel):
     version: str = "3.0"
     mode: str = "search"              # "search" | "federation" | "agent"
@@ -158,6 +174,8 @@ class Config(BaseModel):
     federation: FederationConfig = Field(default_factory=FederationConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     modular_rag: ModularRAGConfig = Field(default_factory=ModularRAGConfig)
+    connector: ConnectorConfig = Field(default_factory=ConnectorConfig)
+    decomposer: DecomposerConfig = Field(default_factory=DecomposerConfig)
 
     @classmethod
     def load(cls, path: str) -> "Config":

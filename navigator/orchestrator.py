@@ -5,17 +5,23 @@ import time
 import uuid
 from typing import Optional
 
+import concurrent.futures
+import hashlib
+
 from .config import Config, SearchDefaultsConfig
 from .embedder import Embedder
 from .reranker import Reranker
 from .searcher import QdrantSearcher, MockSearcher
 from .vault_client import VaultClient, NoopVaultClient
 from .token_rewriter import TokenRewriter
-from .router import Router, RoutingDecision
+from .router import Router, RoutingDecision, QueryIntent
 from .evaluator import Evaluator, EvaluatorConfig, QualityVerdict
 from .hyde import HyDETransformer
+from .decomposer import QueryDecomposer, DecomposedQuery
 from .models import (
     IndexRequest, IndexResponse,
+    DeltaIndexRequest, DeltaIndexResponse,
+    UpdatePurposesRequest, UpdatePurposesResponse,
     SearchOptions, SearchRequest, SearchResponse, SearchResult, SearchMetadata,
 )
 from .events import (
@@ -23,6 +29,8 @@ from .events import (
     event_chunk_retrieved, event_query_routed,
     event_search_iteration, event_loop_completed,
     event_purpose_filtered, event_chunk_stale, event_query_transformed,
+    event_document_reindexed, event_sub_queries_decomposed,
+    event_steward_purposes_updated,
 )
 from . import metrics
 
@@ -55,6 +63,7 @@ class Orchestrator:
         self._router: Optional[Router] = None
         self._evaluator: Optional[Evaluator] = None
         self._hyde: Optional[HyDETransformer] = None
+        self._decomposer: Optional[QueryDecomposer] = None
 
     def configure_modular_rag(self, router: Router, evaluator: Evaluator) -> None:
         """Enable Modular RAG components (MR-01/03/02/04/05). Called from main.py when enabled."""
@@ -66,6 +75,7 @@ class Orchestrator:
                 llm_endpoint=hyde_cfg.llm_endpoint,
                 timeout_ms=hyde_cfg.timeout_ms,
             )
+        self._decomposer = QueryDecomposer()
 
     def search(self, req: SearchRequest, trace_context: Optional[TraceContext] = None, **kwargs) -> SearchResponse:
         start = time.perf_counter()
@@ -86,6 +96,26 @@ class Orchestrator:
 
         # MR-01: Adaptive routing — select strategy and collections.
         collections, opts = self._do_route(req.query, permission_collections, opts, tc)
+
+        # MR-02-003: Sub-query decomposition for multi-hop queries.
+        # Each sub-query is searched independently; results are merged with RRF.
+        if (
+            self._decomposer is not None
+            and self._cfg.decomposer.enabled
+            and self._router is not None
+        ):
+            routing = self._router.route(req.query, collections)
+            if routing.intent == QueryIntent.MULTI_HOP:
+                t_decomp = time.perf_counter()
+                decomposed = self._decomposer.decompose(req.query, routing.intent.value)
+                decomp_ms = (time.perf_counter() - t_decomp) * 1000
+                if len(decomposed.sub_queries) > 1:
+                    if self._publisher:
+                        self._publisher.publish(event_sub_queries_decomposed(
+                            tc, len(req.query), len(decomposed.sub_queries),
+                            decomposed.strategy, decomp_ms,
+                        ))
+                    return self._search_decomposed(req, decomposed, collections, opts, filters, tc, start)
 
         over_fetch = opts.top_k * self._cfg.search_defaults.over_fetch_multiplier
         mr_cfg = self._cfg.modular_rag
@@ -322,13 +352,24 @@ class Orchestrator:
 
     def index_document(self, req: IndexRequest) -> IndexResponse:
         """Chunk, embed, and upsert a document into the vector store."""
-        from .chunker import chunk_document, ChunkerConfig
-        chunks = chunk_document(
-            req.document_id,
-            req.content,
-            ChunkerConfig(),
-            dict(req.metadata),
+        import hashlib as _hashlib
+        from .chunker import (
+            chunk_by_profile, profile_for_mime,
+            ChunkerConfig, _default_pii_patterns,
         )
+        profile = profile_for_mime(req.mime_type)
+        pii_patterns = _default_pii_patterns()
+        if profile in ("structured_csv", "json_record", "html"):
+            chunks = chunk_by_profile(req.document_id, req.content, profile, dict(req.metadata))
+        else:
+            from .chunker import chunk_document
+            chunks = chunk_document(
+                req.document_id,
+                req.content,
+                ChunkerConfig(pii_patterns=pii_patterns),
+                dict(req.metadata),
+            )
+        content_hash = _hashlib.sha256(req.content.encode("utf-8")).hexdigest()
         if not chunks:
             return IndexResponse(document_id=req.document_id, chunk_count=0)
 
@@ -359,6 +400,9 @@ class Orchestrator:
                     "char_end": chunk.char_end,
                     "last_indexed": last_indexed,
                     "permitted_purposes": ",".join(req.permitted_purposes),
+                    "content_hash": content_hash,          # MR-06-003
+                    "source_version": req.source_version,  # MR-06-003
+                    "mime_type": req.mime_type,             # MR-06-004
                     "content": chunk.content,
                     **{k: v for k, v in req.metadata.items()},
                 },
@@ -369,6 +413,7 @@ class Orchestrator:
             document_id=req.document_id,
             chunk_count=len(chunks),
             chunk_ids=[c.chunk_id for c in chunks],
+            content_hash=content_hash,
         )
 
     def _search_collection(
@@ -405,6 +450,175 @@ class Orchestrator:
                 seen.add(col)
                 out.append(col)
         return out or list(_CATEGORY_TO_COLLECTION.values())
+
+    # ── sub-query decomposition (MR-02-003) ──────────────────────────────────
+
+    def _search_decomposed(
+        self,
+        req: SearchRequest,
+        decomposed: DecomposedQuery,
+        collections: list[str],
+        opts: SearchOptions,
+        filters: dict[str, str],
+        tc: TraceContext,
+        start: float,
+    ) -> SearchResponse:
+        """Execute N sub-queries in parallel and merge results with RRF."""
+        max_workers = min(len(decomposed.sub_queries), self._cfg.decomposer.max_sub_queries)
+
+        def _run_sub(sub_query: str) -> list[SearchResult]:
+            vec = self._embedder.embed(
+                self._rewriter.rewrite_text(sub_query) if self._rewriter else sub_query
+            )
+            results: list[SearchResult] = []
+            for col in collections:
+                results.extend(self._search_collection(col, sub_query, vec, filters, opts,
+                                                        opts.top_k * self._cfg.search_defaults.over_fetch_multiplier))
+            return results
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_run_sub, sq): sq for sq in decomposed.sub_queries}
+            all_sets: list[list[SearchResult]] = []
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    all_sets.append(fut.result())
+                except Exception:
+                    pass
+
+        # Merge all result sets with equal-weight RRF.
+        if not all_sets:
+            merged: list[SearchResult] = []
+        elif len(all_sets) == 1:
+            merged = all_sets[0]
+        else:
+            merged = all_sets[0]
+            for result_set in all_sets[1:]:
+                merged = _rrf(merged, result_set)
+
+        merged = _top_k(merged, opts.top_k)
+
+        if opts.use_reranking and merged:
+            merged = self._reranker.rerank(req.query, merged, opts.top_k)
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        return SearchResponse(
+            request_id=req.request_id,
+            results=merged,
+            metadata=SearchMetadata(
+                strategy="decompose+rrf",
+                total_candidates=sum(len(s) for s in all_sets),
+                filtered_out=0,
+                final_count=len(merged),
+            ),
+            processing_time_ms=duration_ms,
+        )
+
+    # ── delta indexing (MR-06-002/003) ───────────────────────────────────────
+
+    def delta_index_document(self, req: DeltaIndexRequest) -> DeltaIndexResponse:
+        """Re-index a document only when its content hash has changed (MR-06-002).
+
+        Steps (SC-10: deletion is sequential with insertion):
+          1. Compute SHA-256 of new content.
+          2. Check stored hash in Qdrant — skip if identical (unless req.force=True).
+          3. Count + delete old chunks.
+          4. Index new content.
+        """
+        new_hash = hashlib.sha256(req.content.encode("utf-8")).hexdigest()
+        collection = req.category or "default"
+
+        # Attempt to retrieve stored hash from an existing chunk's payload.
+        stored_hash = self._get_stored_hash(collection, req.document_id)
+
+        if not req.force and stored_hash and stored_hash == new_hash:
+            return DeltaIndexResponse(
+                document_id=req.document_id,
+                indexed=False,
+                content_hash=new_hash,
+            )
+
+        # Count old chunks before deletion (for the reindex event).
+        old_count = self._searcher.count_by_document(collection, req.document_id)
+
+        # Delete all existing chunks (SC-10: must complete before upsert).
+        self._searcher.delete_by_document(collection, req.document_id)
+
+        # Index the new content using the standard path.
+        index_req = IndexRequest(
+            document_id=req.document_id,
+            tenant_id=req.tenant_id,
+            category=req.category,
+            title=req.title,
+            content=req.content,
+            metadata=req.metadata,
+            permitted_purposes=req.permitted_purposes,
+            mime_type=req.mime_type,
+            source_version=req.source_version,
+        )
+        index_resp = self.index_document(index_req)
+
+        if self._publisher:
+            tc = TraceContext(tenant_id=req.tenant_id)
+            self._publisher.publish(event_document_reindexed(
+                tc,
+                document_id=req.document_id,
+                collection=collection,
+                old_chunk_count=old_count,
+                new_chunk_count=index_resp.chunk_count,
+                changed_sections=[],
+                reindex_ms=0.0,
+            ))
+
+        return DeltaIndexResponse(
+            document_id=req.document_id,
+            indexed=True,
+            chunk_count=index_resp.chunk_count,
+            old_chunk_count=old_count,
+            content_hash=new_hash,
+        )
+
+    def _get_stored_hash(self, collection: str, document_id: str) -> str:
+        """Retrieve the content_hash from a stored chunk payload, or '' if not found."""
+        # Use sparse_search as a payload-filter scroll to get one chunk.
+        try:
+            results = self._searcher.vector_search(
+                collection, [0.0] * 1024,
+                {"document_id": document_id}, top_k=1
+            )
+            if results:
+                return results[0].metadata.get("content_hash", "")
+        except Exception:
+            pass
+        return ""
+
+    # ── data steward — update purposes (MR-04-004) ───────────────────────────
+
+    def update_document_purposes(self, req: UpdatePurposesRequest) -> UpdatePurposesResponse:
+        """Steward updates permitted_purposes on all chunks of a document.
+
+        Uses Qdrant set_payload() so no re-embedding is required.
+        """
+        collection = req.collection or req.tenant_id and "default" or "default"
+        pp_str = ",".join(req.permitted_purposes)
+        updated = self._searcher.set_payload(
+            collection, req.document_id, {"permitted_purposes": pp_str}
+        )
+        if self._publisher:
+            tc = TraceContext(tenant_id=req.tenant_id, user_id=req.steward_user_id)
+            self._publisher.publish(event_steward_purposes_updated(
+                tc,
+                document_id=req.document_id,
+                collection=collection,
+                steward_user_id=req.steward_user_id,
+                old_purposes=[],
+                new_purposes=req.permitted_purposes,
+            ))
+        return UpdatePurposesResponse(
+            document_id=req.document_id,
+            collection=collection,
+            chunks_updated=updated,
+            permitted_purposes=req.permitted_purposes,
+        )
 
     def _merge_defaults(self, opts: Optional[SearchOptions]) -> SearchOptions:
         d: SearchDefaultsConfig = self._cfg.search_defaults

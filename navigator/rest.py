@@ -25,6 +25,8 @@ from .models import (
     BatchEmbedRequest, BatchEmbedResponse, BatchSearchRequest, BatchSearchResponse,
     CollectionsResponse, EmbedRequest, EmbedResponse, HealthStatus,
     IndexRequest, IndexResponse,
+    DeltaIndexRequest, DeltaIndexResponse,
+    UpdatePurposesRequest, UpdatePurposesResponse,
     RerankRequest, RerankResponse, SearchOptions, SearchRequest, SearchResponse,
 )
 
@@ -197,6 +199,17 @@ def build_app(cfg: Config, orch: Orchestrator, pub: Publisher, hm: HookManager) 
     @app.post("/v1/navigator/index", response_model=IndexResponse)
     def index_document(req: IndexRequest):
         return orch.index_document(req)
+
+    @app.post("/v1/navigator/index/delta", response_model=DeltaIndexResponse)
+    def delta_index(req: DeltaIndexRequest):
+        """Re-index only when content has changed (MR-06-002)."""
+        return orch.delta_index_document(req)
+
+    @app.patch("/v1/navigator/documents/{document_id}/purposes", response_model=UpdatePurposesResponse)
+    def update_purposes(document_id: str, req: UpdatePurposesRequest):
+        """Data steward updates permitted_purposes on an indexed document (MR-04-004)."""
+        req.document_id = document_id
+        return orch.update_document_purposes(req)
 
     # ── collections ─────────────────────────────────────────────────────────
 
