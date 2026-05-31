@@ -1,7 +1,7 @@
 # Bastion-Navigator (Module C)
 
 ## Overview
-**Bastion-Navigator** is the search and ranking layer of the Bastion RAG Security Governance Framework. It provides high-performance vector search, hybrid retrieval, and re-ranking capabilities while ensuring tenant-level isolation and access-aware filtering.
+**Bastion-Navigator** is the search and ranking layer of the Bastion-RAG Security Governance Framework. It provides high-performance vector search, hybrid retrieval, and re-ranking capabilities while ensuring tenant-level isolation and access-aware filtering.
 
 Navigator integrates with **Qdrant** for vector storage and uses **BGE-M3** embeddings for multilingual support (Korean & English).
 

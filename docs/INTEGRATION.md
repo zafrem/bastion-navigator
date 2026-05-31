@@ -1,13 +1,13 @@
 # Integration & Connection Guide
 
-This document describes how Bastion-Navigator can be integrated into the broader Bastion RAG pipeline and the different connection modes supported.
+This document describes how Bastion-Navigator can be integrated into the broader Bastion-RAG pipeline and the different connection modes supported.
 
 ## 1. Connection Modes
 
 Bastion-Navigator supports three primary integration patterns:
 
 ### 1.1 Serial Pipeline (Standard)
-In the standard Bastion pipeline, modules are called sequentially:
+In the standard Bastion-RAG pipeline, modules are called sequentially:
 `Sentinel (Module A) -> Vault (Module B) -> Navigator (Module C) -> Anchor (Module E) -> LLM`
 
 In this mode, `Vault` resolves user permissions and PII anonymization before passing the request to `Navigator`.
@@ -18,7 +18,7 @@ Navigator can operate in an **inline** fashion where it receives "pre-resolved" 
 If the `allowed_categories` list is populated in the request, Navigator will **skip** the direct call to Vault and use the provided categories for filtering. This reduces latency and allows Navigator to act as a specialized retrieval middleware within a pre-authorized flow.
 
 ### 1.3 Standalone / Replacement Mode
-Navigator can run as a standalone service, independent of the rest of the Bastion framework.
+Navigator can run as a standalone service, independent of the rest of the Bastion-RAG framework.
 - **Standalone:** By setting `vault.enabled: false` in the configuration, Navigator will mock permission checks (allowing all access) and skip external dependencies.
 - **Replacement:** Navigator's gRPC and REST interfaces are designed to be compatible with standard RAG retrieval patterns, allowing it to replace existing search layers without significant code changes.
 
@@ -31,7 +31,7 @@ Navigator maintains strict protocol consistency between its two primary interfac
 ### 2.1 gRPC (System-to-System)
 - **Port:** 9090
 - **Protocol:** Protobuf / gRPC
-- **Usage:** Recommended for internal Bastion module communication to minimize serialization overhead.
+- **Usage:** Recommended for internal Bastion-RAG module communication to minimize serialization overhead.
 
 ### 2.2 REST API (External/App)
 - **Port:** 8080

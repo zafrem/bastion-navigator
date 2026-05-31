@@ -95,7 +95,7 @@ Re-score and re-order a set of candidates based on a query.
 
 The gRPC API is available on port `9090` by default.
 
-### Service: `bastion.navigator.v1.NavigatorService`
+### Service: `bastion-rag.navigator.v1.NavigatorService`
 
 #### RPC Methods
 
