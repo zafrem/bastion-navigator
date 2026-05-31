@@ -76,5 +76,11 @@ Navigator provides multiple interfaces:
 - [Integration & Connection Guide](docs/INTEGRATION.md)
 - [SRS Document](docs/bastion_navigator_srs_v1.0_en.md)
 
+**Technical deep-dives (code-based):**
+- [Hybrid Search & Reranking](docs/hybrid-reranking.md)
+- [Logical Partitioning](docs/logical-partitioning.md)
+- [Source Connectors & Delta Indexing](docs/source-connectors.md)
+- [Sub-Query Decomposition](docs/sub-query-decomposition.md)
+
 ## License
 Apache License 2.0

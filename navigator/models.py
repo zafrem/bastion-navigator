@@ -152,12 +152,58 @@ class IndexRequest(BaseModel):
     permitted_purposes: list[str] = Field(
         default_factory=lambda: ["customer_support"]
     )  # MR-04-001: which purposes may access this document
+    mime_type: str = "text/markdown"   # MR-06-004: profile selection
+    source_version: str = ""           # MR-06-003: from source system if available
 
 
 class IndexResponse(BaseModel):
     document_id: str
     chunk_count: int
     chunk_ids: list[str] = Field(default_factory=list)
+    content_hash: str = ""             # MR-06-003: SHA-256 of indexed content
+    was_updated: bool = False          # MR-06-002: True when existing chunks were replaced
+
+
+# ─── Delta indexing (MR-06-002) ───────────────────────────────────────────────
+
+class DeltaIndexRequest(BaseModel):
+    """Re-index a document only when its content hash has changed."""
+    document_id: str
+    tenant_id: str = ""
+    category: str = ""
+    title: str = ""
+    content: str
+    metadata: dict[str, str] = Field(default_factory=dict)
+    permitted_purposes: list[str] = Field(default_factory=lambda: ["customer_support"])
+    mime_type: str = "text/markdown"
+    source_version: str = ""
+    force: bool = False   # skip hash check and always re-index
+
+
+class DeltaIndexResponse(BaseModel):
+    document_id: str
+    indexed: bool            # False = skipped (content unchanged)
+    chunk_count: int = 0
+    old_chunk_count: int = 0
+    content_hash: str = ""
+
+
+# ─── Data steward — purposes update (MR-04-004) ───────────────────────────────
+
+class UpdatePurposesRequest(BaseModel):
+    """Steward updates permitted_purposes on an already-indexed document."""
+    document_id: str
+    tenant_id: str = ""
+    collection: str = ""   # Qdrant collection; inferred from category when empty
+    permitted_purposes: list[str]
+    steward_user_id: str = ""
+
+
+class UpdatePurposesResponse(BaseModel):
+    document_id: str
+    collection: str
+    chunks_updated: int
+    permitted_purposes: list[str]
 
 
 # ─── Federation / Agent models (doc 22) ──────────────────────────────────────

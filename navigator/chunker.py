@@ -3,9 +3,14 @@
 Preserves heading hierarchy (H1→H2→H3 breadcrumb), keeps tables atomic,
 keeps code fences atomic, and carries overlap between paragraph chunks so
 context is not lost at boundaries.
+
+PII split guard (FR-MR-12): loads regex patterns from the pii-pattern-engine
+YAML directory (env var BASTION_PATTERN_DIR) and ensures character-level cuts
+never bisect a PII span such as an RRN, mobile number, or email address.
 """
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -19,6 +24,7 @@ class ChunkerConfig:
     max_chars: int = 1200       # ~300 tokens at 4 chars/token
     overlap_chars: int = 120    # tail of previous chunk prepended to next
     min_chars: int = 80         # chunks smaller than this are merged into previous
+    pii_patterns: list = field(default_factory=list)  # compiled re.Pattern objects for PII guard
 
 
 @dataclass
@@ -66,6 +72,97 @@ _RE_HEADING = re.compile(r"^(#{1,6})\s+(.*)")
 _RE_TABLE_ROW = re.compile(r"^\|")
 _RE_FENCE = re.compile(r"^```")
 _RE_LINK = re.compile(r"\[[^\]]*\]\([^)]+\)")
+
+
+# ─── PII pattern loader ───────────────────────────────────────────────────────
+
+def load_pii_patterns(pattern_dir: str) -> list:
+    """Load compiled Python regex patterns from a pii-pattern-engine YAML directory.
+
+    Walks pattern_dir recursively. Each YAML file may contain a ``patterns``
+    list; each entry is compiled using ``langs.python`` (preferred) or the
+    top-level ``pattern`` field. Entries with uncompilable patterns are silently
+    skipped so a single bad YAML file does not abort indexing.
+
+    Returns an empty list when pattern_dir is empty or does not exist.
+    """
+    patterns: list = []
+    if not pattern_dir or not os.path.isdir(pattern_dir):
+        return patterns
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        return patterns
+    for root, _, files in os.walk(pattern_dir):
+        for fname in sorted(files):
+            if not fname.endswith(".yml"):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, encoding="utf-8") as f:
+                    data = yaml.safe_load(f)
+                if not isinstance(data, dict):
+                    continue
+                for entry in data.get("patterns", []):
+                    raw = (
+                        entry.get("langs", {}).get("python")
+                        or entry.get("pattern", "")
+                    )
+                    if not raw:
+                        continue
+                    flags = 0
+                    for flag_name in entry.get("flags", []):
+                        if flag_name == "IGNORECASE":
+                            flags |= re.IGNORECASE
+                    try:
+                        patterns.append(re.compile(raw, flags))
+                    except re.error:
+                        pass
+            except Exception:
+                pass
+    return patterns
+
+
+# Module-level cache: populated on first call; avoids re-walking the directory
+# on every chunk_document() call while keeping the loader side-effect-free at
+# import time.
+_DEFAULT_PII_PATTERNS: Optional[list] = None
+
+
+def _default_pii_patterns() -> list:
+    """Return patterns loaded from BASTION_PATTERN_DIR (cached after first call)."""
+    global _DEFAULT_PII_PATTERNS
+    if _DEFAULT_PII_PATTERNS is None:
+        pdir = os.environ.get("BASTION_PATTERN_DIR", "")
+        _DEFAULT_PII_PATTERNS = load_pii_patterns(pdir)
+    return _DEFAULT_PII_PATTERNS
+
+
+# ─── PII guard helpers ────────────────────────────────────────────────────────
+
+def _pii_spans(text: str, patterns: list) -> list:
+    """Return all PII match spans in text as a sorted list of (start, end) tuples."""
+    spans = []
+    for pat in patterns:
+        for m in pat.finditer(text):
+            spans.append((m.start(), m.end()))
+    return sorted(spans)
+
+
+def _safe_cut(pos: int, spans: list) -> int:
+    """Return the earliest position >= pos that does not bisect a PII span.
+
+    If ``pos`` falls strictly inside a span ``(start, end)`` — i.e.
+    ``start < pos < end`` — the cut is advanced to ``end``. Multiple nested or
+    adjacent spans are handled by iterating in sorted order.
+    """
+    adjusted = pos
+    for start, end in spans:
+        if start >= adjusted:
+            break  # spans are sorted; nothing further can overlap adjusted
+        if adjusted < end:
+            adjusted = end  # advance past this span
+    return adjusted
 
 
 # ─── parser ───────────────────────────────────────────────────────────────────
@@ -152,12 +249,21 @@ def _parse_blocks(text: str) -> list[_Block]:
     return blocks
 
 
-def _split_oversized(text: str, max_chars: int, overlap_chars: int) -> list[str]:
+def _split_oversized(
+    text: str,
+    max_chars: int,
+    overlap_chars: int,
+    pii_patterns: Optional[list] = None,
+) -> list[str]:
     """Split a block exceeding max_chars at sentence boundaries using NLTK Punkt.
 
     Falls back to hard-cut with overlap if the punkt data is not available.
     Punkt handles abbreviations (Dr., U.S.A., Fig.) and Korean sentence endings
     that the previous regex pattern could not.
+
+    When pii_patterns is provided the character-level fallback advances each
+    cut point past any PII span it would bisect, keeping values like RRNs and
+    mobile numbers intact within a single part.
     """
     try:
         from nltk.tokenize import sent_tokenize  # type: ignore
@@ -168,12 +274,20 @@ def _split_oversized(text: str, max_chars: int, overlap_chars: int) -> list[str]
     if sentences:
         return _pack_sentences(sentences, max_chars, overlap_chars, text)
 
-    # Fallback: hard cut with overlap (punkt data not installed)
+    # Fallback: hard cut with PII guard
+    active = pii_patterns or []
     parts: list[str] = []
     remaining = text
     while len(remaining) > max_chars:
-        parts.append(remaining[:max_chars].strip())
-        remaining = remaining[max(0, max_chars - overlap_chars):].lstrip()
+        cut = max_chars
+        if active:
+            spans = _pii_spans(remaining, active)
+            cut = _safe_cut(max_chars, spans)
+            if cut >= len(remaining):
+                # PII span covers the rest of the text; keep it whole.
+                break
+        parts.append(remaining[:cut].strip())
+        remaining = remaining[max(0, cut - overlap_chars):].lstrip()
     if remaining.strip():
         parts.append(remaining.strip())
     return parts or [text]
@@ -223,6 +337,10 @@ def chunk_document(
     metadata = metadata or {}
     blocks = _parse_blocks(content)
 
+    # Resolve active PII patterns: caller-supplied takes priority over the
+    # module-level cache from BASTION_PATTERN_DIR.
+    active_patterns: list = cfg.pii_patterns if cfg.pii_patterns else _default_pii_patterns()
+
     heading_path: list[str] = []
     chunks: list[Chunk] = []
     buf_pieces: list[str] = []
@@ -248,7 +366,14 @@ def chunk_document(
             char_end=end,
             metadata=dict(metadata),
         ))
-        overlap = text[-cfg.overlap_chars:] if cfg.overlap_chars else ""
+        # PII guard on overlap: don't let the overlap window start mid-PII span.
+        raw_overlap = text[-cfg.overlap_chars:] if cfg.overlap_chars else ""
+        if raw_overlap and active_patterns:
+            overlap_start = len(text) - len(raw_overlap)
+            safe_start = _safe_cut(overlap_start, _pii_spans(text, active_patterns))
+            overlap = text[safe_start:] if safe_start < len(text) else ""
+        else:
+            overlap = raw_overlap
         buf_pieces = []
         buf_is_table = False
 
@@ -257,7 +382,9 @@ def chunk_document(
 
         # A single block may itself exceed max_chars — split it first.
         if len(block.text) > cfg.max_chars:
-            sub_texts = _split_oversized(block.text, cfg.max_chars, cfg.overlap_chars)
+            sub_texts = _split_oversized(
+                block.text, cfg.max_chars, cfg.overlap_chars, active_patterns
+            )
         else:
             sub_texts = [block.text]
 
@@ -342,3 +469,160 @@ def chunk_document(
         )
 
     return chunks
+
+
+# ─── Schema-aware chunking profiles (FR-MR-06-004) ───────────────────────────
+
+PROFILE_MARKDOWN      = "markdown"
+PROFILE_PLAIN_TEXT    = "plain_text"
+PROFILE_STRUCTURED_CSV = "structured_csv"
+PROFILE_JSON_RECORD   = "json_record"
+PROFILE_HTML          = "html"
+
+# Profile → (max_chars, overlap_chars). CSV and JSON use dedicated chunkers below.
+_PROFILE_CONFIG: dict[str, tuple[int, int]] = {
+    PROFILE_MARKDOWN:   (1200, 120),
+    PROFILE_PLAIN_TEXT: (800,  80),
+    PROFILE_HTML:       (1200, 120),
+}
+
+# MIME type → profile name.
+_MIME_PROFILE: dict[str, str] = {
+    "text/markdown":      PROFILE_MARKDOWN,
+    "text/plain":         PROFILE_PLAIN_TEXT,
+    "text/csv":           PROFILE_STRUCTURED_CSV,
+    "application/json":   PROFILE_JSON_RECORD,
+    "text/html":          PROFILE_HTML,
+    "text/htm":           PROFILE_HTML,
+}
+
+# File extension → profile name (fallback when MIME type is absent).
+_EXT_PROFILE: dict[str, str] = {
+    ".md":   PROFILE_MARKDOWN,
+    ".txt":  PROFILE_PLAIN_TEXT,
+    ".csv":  PROFILE_STRUCTURED_CSV,
+    ".json": PROFILE_JSON_RECORD,
+    ".html": PROFILE_HTML,
+    ".htm":  PROFILE_HTML,
+}
+
+
+def profile_for_mime(mime_type: str, filename: str = "") -> str:
+    """Return the profile name for a MIME type, falling back to file extension."""
+    if mime_type and mime_type in _MIME_PROFILE:
+        return _MIME_PROFILE[mime_type]
+    if filename:
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in _EXT_PROFILE:
+            return _EXT_PROFILE[ext]
+    return PROFILE_MARKDOWN
+
+
+def config_for_profile(profile: str) -> ChunkerConfig:
+    """Return a ChunkerConfig pre-set for the given profile.
+
+    CSV and JSON profiles return a sentinel config (max_chars=0) that signals
+    the caller should use ``chunk_csv`` / ``chunk_json`` instead.
+    """
+    if profile in (PROFILE_STRUCTURED_CSV, PROFILE_JSON_RECORD):
+        return ChunkerConfig(max_chars=0, overlap_chars=0)
+    max_c, overlap_c = _PROFILE_CONFIG.get(profile, (1200, 120))
+    return ChunkerConfig(max_chars=max_c, overlap_chars=overlap_c)
+
+
+def chunk_by_profile(
+    document_id: str,
+    content: str,
+    profile: str,
+    metadata: Optional[dict] = None,
+) -> list[Chunk]:
+    """Dispatch to the correct chunker for the given profile."""
+    metadata = metadata or {}
+    if profile == PROFILE_STRUCTURED_CSV:
+        return chunk_csv(document_id, content, metadata)
+    if profile == PROFILE_JSON_RECORD:
+        return chunk_json(document_id, content, metadata)
+    if profile == PROFILE_HTML:
+        return chunk_html(document_id, content, metadata)
+    cfg = config_for_profile(profile)
+    return chunk_document(document_id, content, cfg, metadata)
+
+
+def chunk_csv(document_id: str, content: str, metadata: Optional[dict] = None) -> list[Chunk]:
+    """One Chunk per CSV row. The header row is prepended to every data row."""
+    import csv, io
+    metadata = metadata or {}
+    chunks: list[Chunk] = []
+    reader = csv.reader(io.StringIO(content))
+    rows = list(reader)
+    if not rows:
+        return chunks
+    header = rows[0]
+    header_text = ",".join(header)
+    char_pos = len(content.splitlines()[0]) + 1 if content else 0
+    for idx, row in enumerate(rows[1:]):
+        row_text = ",".join(row)
+        combined = f"{header_text}\n{row_text}"
+        end = char_pos + len(row_text)
+        chunks.append(Chunk(
+            chunk_id=f"{document_id}_{idx:04d}",
+            parent_document_id=document_id,
+            chunk_index=idx,
+            content=combined,
+            heading_path=[],
+            char_start=char_pos,
+            char_end=end,
+            metadata=dict(metadata),
+        ))
+        char_pos = end + 1
+    return chunks
+
+
+def chunk_json(document_id: str, content: str, metadata: Optional[dict] = None) -> list[Chunk]:
+    """One Chunk per top-level JSON object (array) or one Chunk for a single object."""
+    import json as _json
+    metadata = metadata or {}
+    chunks: list[Chunk] = []
+    try:
+        data = _json.loads(content)
+    except _json.JSONDecodeError:
+        # Fall back to plain-text chunking on invalid JSON.
+        return chunk_document(document_id, content, ChunkerConfig(max_chars=800), metadata)
+
+    records = data if isinstance(data, list) else [data]
+    for idx, record in enumerate(records):
+        text = _json.dumps(record, ensure_ascii=False)
+        chunks.append(Chunk(
+            chunk_id=f"{document_id}_{idx:04d}",
+            parent_document_id=document_id,
+            chunk_index=idx,
+            content=text,
+            heading_path=[],
+            metadata=dict(metadata),
+        ))
+    return chunks
+
+
+def chunk_html(
+    document_id: str,
+    content: str,
+    metadata: Optional[dict] = None,
+    cfg: Optional[ChunkerConfig] = None,
+) -> list[Chunk]:
+    """Strip HTML tags, then chunk the resulting plain text as markdown."""
+    from html.parser import HTMLParser
+
+    class _Stripper(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self._parts: list[str] = []
+        def handle_data(self, data: str) -> None:
+            self._parts.append(data)
+        def get_text(self) -> str:
+            return " ".join(self._parts)
+
+    stripper = _Stripper()
+    stripper.feed(content)
+    plain = stripper.get_text().strip()
+    cfg = cfg or ChunkerConfig(max_chars=1200, overlap_chars=120)
+    return chunk_document(document_id, plain, cfg, metadata or {})

@@ -126,6 +126,57 @@ class QdrantSearcher:
             ],
         )
 
+    def delete_by_document(self, collection: str, document_id: str) -> int:
+        """Delete all points whose document_id payload field matches document_id.
+
+        Returns the number of points deleted (estimated from Qdrant status).
+        Uses FilterSelector so the delete is server-side; no client-side scan.
+        """
+        from qdrant_client.models import (  # type: ignore
+            Filter, FieldCondition, MatchValue, FilterSelector,
+        )
+        start = time.perf_counter()
+        result = self._client.delete(
+            collection_name=collection,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+                )
+            ),
+        )
+        metrics.qdrant_call_duration_seconds.labels(operation="delete_by_document").observe(
+            time.perf_counter() - start
+        )
+        # Qdrant returns UpdateResult; deleted count is not always available —
+        # return 0 as a safe default when the field is missing.
+        return getattr(result, "deleted", 0) or 0
+
+    def set_payload(self, collection: str, document_id: str, payload_patch: dict) -> int:
+        """Overwrite selected payload fields on all chunks of a document (MR-04-004).
+
+        Returns estimated count of updated points.
+        """
+        from qdrant_client.models import Filter, FieldCondition, MatchValue  # type: ignore
+        result = self._client.set_payload(
+            collection_name=collection,
+            payload=payload_patch,
+            points=Filter(
+                must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+            ),
+        )
+        return getattr(result, "updated", 0) or 0
+
+    def count_by_document(self, collection: str, document_id: str) -> int:
+        """Count chunks stored for a document (used for delta-index old_chunk_count)."""
+        from qdrant_client.models import Filter, FieldCondition, MatchValue  # type: ignore
+        result = self._client.count(
+            collection_name=collection,
+            count_filter=Filter(
+                must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+            ),
+        )
+        return result.count if result else 0
+
 
 class MockSearcher:
     """In-memory mock searcher for tests."""
@@ -144,3 +195,12 @@ class MockSearcher:
 
     def upsert(self, collection: str, points: list[dict]) -> None:
         pass
+
+    def delete_by_document(self, collection: str, document_id: str) -> int:
+        return 0
+
+    def set_payload(self, collection: str, document_id: str, payload_patch: dict) -> int:
+        return 0
+
+    def count_by_document(self, collection: str, document_id: str) -> int:
+        return 0
