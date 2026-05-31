@@ -1,7 +1,7 @@
 # Bastion-Navigator Design Document
 
 ## 1. Introduction
-Navigator is Module C of the Bastion framework, responsible for retrieval operations in the RAG pipeline. It ensures that only relevant and authorized documents are retrieved for a given query.
+Navigator is Module C of the Bastion-RAG framework, responsible for retrieval operations in the RAG pipeline. It ensures that only relevant and authorized documents are retrieved for a given query.
 
 ## 2. System Architecture
 
