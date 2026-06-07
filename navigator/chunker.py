@@ -25,6 +25,13 @@ class ChunkerConfig:
     overlap_chars: int = 120    # tail of previous chunk prepended to next
     min_chars: int = 80         # chunks smaller than this are merged into previous
     pii_patterns: list = field(default_factory=list)  # compiled re.Pattern objects for PII guard
+    # Markdown structural regexes. Empty strings fall back to the built-in
+    # defaults (DEFAULT_HEADING_PATTERN etc.) so the Markdown grammar is tunable
+    # without touching code.
+    heading_pattern: str = ""
+    table_row_pattern: str = ""
+    fence_pattern: str = ""
+    link_pattern: str = ""
 
 
 @dataclass
@@ -68,10 +75,43 @@ class _Block:
 
 # ─── regex ────────────────────────────────────────────────────────────────────
 
-_RE_HEADING = re.compile(r"^(#{1,6})\s+(.*)")
-_RE_TABLE_ROW = re.compile(r"^\|")
-_RE_FENCE = re.compile(r"^```")
-_RE_LINK = re.compile(r"\[[^\]]*\]\([^)]+\)")
+# Default Markdown structural patterns. Overridable per-document via ChunkerConfig.
+DEFAULT_HEADING_PATTERN = r"^(#{1,6})\s+(.*)"
+DEFAULT_TABLE_ROW_PATTERN = r"^\|"
+DEFAULT_FENCE_PATTERN = r"^```"
+DEFAULT_LINK_PATTERN = r"\[[^\]]*\]\([^)]+\)"
+
+_RE_HEADING = re.compile(DEFAULT_HEADING_PATTERN)
+_RE_TABLE_ROW = re.compile(DEFAULT_TABLE_ROW_PATTERN)
+_RE_FENCE = re.compile(DEFAULT_FENCE_PATTERN)
+_RE_LINK = re.compile(DEFAULT_LINK_PATTERN)
+
+
+@dataclass
+class _MarkdownPatterns:
+    """Compiled Markdown structural regexes used by a single chunk_document run."""
+    heading: "re.Pattern"
+    table_row: "re.Pattern"
+    fence: "re.Pattern"
+    link: "re.Pattern"
+
+
+def _resolve_md_patterns(cfg: "ChunkerConfig") -> _MarkdownPatterns:
+    """Build the active Markdown patterns, falling back to module defaults when a
+    cfg override is empty or fails to compile."""
+    def pick(raw: str, default: "re.Pattern") -> "re.Pattern":
+        if raw:
+            try:
+                return re.compile(raw)
+            except re.error:
+                return default
+        return default
+    return _MarkdownPatterns(
+        heading=pick(cfg.heading_pattern, _RE_HEADING),
+        table_row=pick(cfg.table_row_pattern, _RE_TABLE_ROW),
+        fence=pick(cfg.fence_pattern, _RE_FENCE),
+        link=pick(cfg.link_pattern, _RE_LINK),
+    )
 
 
 # ─── PII pattern loader ───────────────────────────────────────────────────────
@@ -167,8 +207,11 @@ def _safe_cut(pos: int, spans: list) -> int:
 
 # ─── parser ───────────────────────────────────────────────────────────────────
 
-def _parse_blocks(text: str) -> list[_Block]:
+def _parse_blocks(text: str, pats: Optional[_MarkdownPatterns] = None) -> list[_Block]:
     """Split document text into typed blocks (headings, tables, code, paragraphs)."""
+    if pats is None:
+        pats = _MarkdownPatterns(_RE_HEADING, _RE_TABLE_ROW, _RE_FENCE, _RE_LINK)
+    re_heading, re_table, re_fence = pats.heading, pats.table_row, pats.fence
     lines = text.splitlines()
     blocks: list[_Block] = []
     i = 0
@@ -180,7 +223,7 @@ def _parse_blocks(text: str) -> list[_Block]:
         char_pos += len(line) + 1
 
         # Heading
-        m = _RE_HEADING.match(line)
+        m = re_heading.match(line)
         if m:
             blocks.append(_Block(
                 text=line,
@@ -192,11 +235,11 @@ def _parse_blocks(text: str) -> list[_Block]:
             continue
 
         # Code fence — collect until closing ```
-        if _RE_FENCE.match(line):
+        if re_fence.match(line):
             fence_start = line_start
             collected = [line]
             i += 1
-            while i < len(lines) and not _RE_FENCE.match(lines[i]):
+            while i < len(lines) and not re_fence.match(lines[i]):
                 char_pos += len(lines[i]) + 1
                 collected.append(lines[i])
                 i += 1
@@ -208,11 +251,11 @@ def _parse_blocks(text: str) -> list[_Block]:
             continue
 
         # Table — collect consecutive | rows
-        if _RE_TABLE_ROW.match(line):
+        if re_table.match(line):
             table_start = line_start
             collected = [line]
             i += 1
-            while i < len(lines) and _RE_TABLE_ROW.match(lines[i]):
+            while i < len(lines) and re_table.match(lines[i]):
                 char_pos += len(lines[i]) + 1
                 collected.append(lines[i])
                 i += 1
@@ -236,9 +279,9 @@ def _parse_blocks(text: str) -> list[_Block]:
             nxt = lines[i]
             if (
                 not nxt.strip()
-                or _RE_HEADING.match(nxt)
-                or _RE_TABLE_ROW.match(nxt)
-                or _RE_FENCE.match(nxt)
+                or re_heading.match(nxt)
+                or re_table.match(nxt)
+                or re_fence.match(nxt)
             ):
                 break
             char_pos += len(nxt) + 1
@@ -335,7 +378,8 @@ def chunk_document(
 
     cfg = cfg or ChunkerConfig()
     metadata = metadata or {}
-    blocks = _parse_blocks(content)
+    md_pats = _resolve_md_patterns(cfg)
+    blocks = _parse_blocks(content, md_pats)
 
     # Resolve active PII patterns: caller-supplied takes priority over the
     # module-level cache from BASTION_PATTERN_DIR.
@@ -361,7 +405,7 @@ def chunk_document(
             content=text,
             heading_path=list(heading_path),
             contains_table=buf_is_table,
-            contains_link=bool(_RE_LINK.search(text)),
+            contains_link=bool(md_pats.link.search(text)),
             char_start=buf_start,
             char_end=end,
             metadata=dict(metadata),
@@ -432,7 +476,7 @@ def chunk_document(
                     content=text,
                     heading_path=list(heading_path),
                     contains_table=True,
-                    contains_link=bool(_RE_LINK.search(text)),
+                    contains_link=bool(md_pats.link.search(text)),
                     char_start=block.char_start,
                     char_end=block_end,
                     metadata=dict(metadata),

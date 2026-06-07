@@ -3,12 +3,35 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Optional
 
 from .models import CollectionInfo, SearchResult
 from . import metrics
 
 log = logging.getLogger(__name__)
+
+# Sidecar collection holding one centroid point per real collection (FR-MR-01-003).
+# Kept separate so topic vectors never pollute document search results.
+_TOPIC_COLLECTION = "__bastion_topics__"
+_TOPIC_NAMESPACE = uuid.UUID("6f2b9c4a-1e3d-4a7b-8c5e-0d9f1a2b3c4d")
+
+
+def _topic_point_id(collection: str) -> str:
+    """Deterministic UUID for a collection's centroid point in the sidecar."""
+    return str(uuid.uuid5(_TOPIC_NAMESPACE, collection))
+
+
+def _fold_centroid(
+    old: Optional[list[float]], old_count: int, new_vectors: list[list[float]]
+) -> tuple[list[float], int]:
+    """Incrementally fold new_vectors into a running mean centroid."""
+    new_sum = [sum(col) for col in zip(*new_vectors)]
+    new_count = len(new_vectors)
+    if old is None or old_count <= 0:
+        return [s / new_count for s in new_sum], new_count
+    total = old_count + new_count
+    return [(o * old_count + s) / total for o, s in zip(old, new_sum)], total
 
 
 def _build_filter(filters: dict[str, str]) -> dict:
@@ -106,7 +129,51 @@ class QdrantSearcher:
 
     def collections(self) -> list[CollectionInfo]:
         cols = self._client.get_collections().collections
-        return [CollectionInfo(name=c.name) for c in cols]
+        return [CollectionInfo(name=c.name) for c in cols if c.name != _TOPIC_COLLECTION]
+
+    # ── topic centroids (FR-MR-01-003) ────────────────────────────────────────
+
+    def update_topic_vector(self, collection: str, vectors: list[list[float]]) -> None:
+        """Fold *vectors* into the collection's running topic centroid (best-effort)."""
+        if not vectors:
+            return
+        try:
+            self.ensure_collection(_TOPIC_COLLECTION, vector_size=len(vectors[0]))
+            old, old_count = self._get_topic_raw(collection)
+            centroid, count = _fold_centroid(old, old_count, vectors)
+            self.upsert(_TOPIC_COLLECTION, [{
+                "id": _topic_point_id(collection),
+                "vector": centroid,
+                "payload": {"collection": collection, "count": count},
+            }])
+        except Exception as exc:  # topic maintenance must never break indexing
+            log.warning("[searcher] topic vector update failed for %s: %s", collection, exc)
+
+    def _get_topic_raw(self, collection: str) -> tuple[Optional[list[float]], int]:
+        try:
+            pts = self._client.retrieve(
+                collection_name=_TOPIC_COLLECTION,
+                ids=[_topic_point_id(collection)],
+                with_vectors=True,
+                with_payload=True,
+            )
+        except Exception:
+            return None, 0
+        if not pts:
+            return None, 0
+        p = pts[0]
+        return list(p.vector) if p.vector else None, int((p.payload or {}).get("count", 0))
+
+    def get_topic_vector(self, collection: str) -> Optional[list[float]]:
+        return self._get_topic_raw(collection)[0]
+
+    def get_topic_vectors(self, collections: list[str]) -> dict[str, list[float]]:
+        out: dict[str, list[float]] = {}
+        for c in collections:
+            v = self.get_topic_vector(c)
+            if v is not None:
+                out[c] = v
+        return out
 
     def ensure_collection(self, name: str, vector_size: int = 768) -> None:
         from qdrant_client.models import VectorParams, Distance  # type: ignore
@@ -181,6 +248,10 @@ class QdrantSearcher:
 class MockSearcher:
     """In-memory mock searcher for tests."""
 
+    def __init__(self) -> None:
+        # collection -> (centroid, count)
+        self._topics: dict[str, tuple[list[float], int]] = {}
+
     def vector_search(self, *args, **kwargs) -> list[SearchResult]:
         return []
 
@@ -204,3 +275,16 @@ class MockSearcher:
 
     def count_by_document(self, collection: str, document_id: str) -> int:
         return 0
+
+    def update_topic_vector(self, collection: str, vectors: list[list[float]]) -> None:
+        if not vectors:
+            return
+        old, old_count = self._topics.get(collection, (None, 0))
+        self._topics[collection] = _fold_centroid(old, old_count, vectors)
+
+    def get_topic_vector(self, collection: str) -> Optional[list[float]]:
+        entry = self._topics.get(collection)
+        return entry[0] if entry else None
+
+    def get_topic_vectors(self, collections: list[str]) -> dict[str, list[float]]:
+        return {c: self._topics[c][0] for c in collections if c in self._topics}

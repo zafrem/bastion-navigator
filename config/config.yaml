@@ -74,3 +74,43 @@ cache:
 events:
   nats_url: nats://nats:4222
   enabled: true
+
+# ── Configurable patterns ─────────────────────────────────────────────────────
+# Every regex below is optional. When omitted (or empty) the built-in default
+# shown in the comment is used, so behavior is unchanged unless you override it.
+# An invalid override falls back to the default (a warning is logged). All
+# router/decomposer patterns are matched case-insensitively.
+
+# modular_rag:
+#   router:
+#     # FR-MR-01-003: when true, collections are scored by cosine similarity
+#     # between the query embedding and each collection's topic centroid
+#     # (maintained at index time). When false, the keyword proxy is used.
+#     use_embedding_affinity: false
+#     routing_threshold: 0.25
+#     # Per-tenant routing_threshold overrides (tenant_id -> threshold):
+#     tenant_thresholds:
+#       acme: 0.35
+#     # Intent-classification regexes. Defaults:
+#     analytical_pattern: "\\b(compare|trend|average|total|distribution|breakdown|percentage|ratio|aggregate|summary|statistics)\\b|분석|비교|통계|현황|추이|평균|합계"
+#     procedural_pattern: "\\b(how to|procedure|process|policy|guideline|step|apply)\\b|방법|절차|정책|기준|신청|지침"
+#     multi_hop_pattern:  "\\b(and also|as well as|both)\\b|그리고|또한|및"
+#     factual_pattern:    "\\b(what is|what are|show me|get|find|list|retrieve)\\b|조회|확인|찾아|몇|언제|어디"
+
+# decomposer:
+#   # Sub-query split regexes. Defaults:
+#   conjunction_en_pattern:     "\\band\\s+also\\b|\\bas\\s+well\\s+as\\b|\\bboth\\b|\\bmoreover\\b|\\badditionally\\b|\\bfurthermore\\b|\\balso\\b(?=\\s+(?:find|show|get|list|what|who|when|where))"
+#   conjunction_kr_pattern:     "그리고|또한|및|더불어|아울러"
+#   temporal_pattern:           "\\b(?:before|after|since|until|when|while)\\b|이전에|이후에|동안에|전에|후에"
+#   sentence_separator_pattern: "[.!?。！？]+\\s+"
+
+# token_rewriter:
+#   # Vault-token detection regex (2 capture groups: kind, hex suffix). Default:
+#   token_pattern: "\\b(KR_NAME|EMAIL_honey|EMAIL|MOBILE|RRN_TOKEN|EMP|WRK)_([0-9a-f]{6})\\b"
+
+# chunking:
+#   # Markdown structural regexes used by the chunker. Defaults:
+#   heading_pattern:   "^(#{1,6})\\s+(.*)"
+#   table_row_pattern: "^\\|"
+#   fence_pattern:     "^```"
+#   link_pattern:      "\\[[^\\]]*\\]\\([^)]+\\)"

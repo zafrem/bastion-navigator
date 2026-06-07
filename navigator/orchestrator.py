@@ -75,7 +75,7 @@ class Orchestrator:
                 llm_endpoint=hyde_cfg.llm_endpoint,
                 timeout_ms=hyde_cfg.timeout_ms,
             )
-        self._decomposer = QueryDecomposer()
+        self._decomposer = QueryDecomposer(self._cfg.decomposer)
 
     def search(self, req: SearchRequest, trace_context: Optional[TraceContext] = None, **kwargs) -> SearchResponse:
         start = time.perf_counter()
@@ -321,11 +321,26 @@ class Orchestrator:
         if self._router is None:
             return permission_collections, opts
         try:
+            router_cfg = self._cfg.modular_rag.router
+            threshold = router_cfg.tenant_thresholds.get(
+                tc.tenant_id, router_cfg.routing_threshold
+            )
+            # FR-MR-01-003: embedding-based domain affinity (opt-in).
+            query_vector = None
+            topic_vectors = None
+            if router_cfg.use_embedding_affinity:
+                get_topics = getattr(self._searcher, "get_topic_vectors", None)
+                if callable(get_topics):
+                    topic_vectors = get_topics(permission_collections)
+                    if topic_vectors:
+                        query_vector = self._embedder.embed(query)
             routing = self._router.route(
                 query,
                 permission_collections,
-                routing_threshold=self._cfg.modular_rag.router.routing_threshold,
+                routing_threshold=threshold,
                 strategy_override=opts.strategy,
+                query_vector=query_vector,
+                topic_vectors=topic_vectors,
             )
             if self._publisher:
                 self._publisher.publish(event_query_routed(
@@ -359,6 +374,7 @@ class Orchestrator:
         )
         profile = profile_for_mime(req.mime_type)
         pii_patterns = _default_pii_patterns()
+        ck = self._cfg.chunking
         if profile in ("structured_csv", "json_record", "html"):
             chunks = chunk_by_profile(req.document_id, req.content, profile, dict(req.metadata))
         else:
@@ -366,7 +382,13 @@ class Orchestrator:
             chunks = chunk_document(
                 req.document_id,
                 req.content,
-                ChunkerConfig(pii_patterns=pii_patterns),
+                ChunkerConfig(
+                    pii_patterns=pii_patterns,
+                    heading_pattern=ck.heading_pattern,
+                    table_row_pattern=ck.table_row_pattern,
+                    fence_pattern=ck.fence_pattern,
+                    link_pattern=ck.link_pattern,
+                ),
                 dict(req.metadata),
             )
         content_hash = _hashlib.sha256(req.content.encode("utf-8")).hexdigest()
@@ -408,6 +430,12 @@ class Orchestrator:
                 },
             })
         self._searcher.upsert(collection, points)
+
+        # FR-MR-01-003: fold the new chunk vectors into the collection topic
+        # centroid used for embedding-based domain routing. Best-effort.
+        update_topic = getattr(self._searcher, "update_topic_vector", None)
+        if callable(update_topic):
+            update_topic(collection, vectors)
 
         return IndexResponse(
             document_id=req.document_id,
