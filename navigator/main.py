@@ -62,11 +62,11 @@ def main() -> None:
     vault = VaultClient(cfg.vault.endpoint) if cfg.vault.enabled else NoopVaultClient()
 
     pub = Publisher(cfg.events.nats_url)
-    rewriter = TokenRewriter()
+    rewriter = TokenRewriter(token_pattern=cfg.token_rewriter.token_pattern)
     base_orch = Orchestrator(cfg, embedder, searcher, reranker, vault, rewriter=rewriter, publisher=pub)
 
     if cfg.modular_rag.enabled:
-        base_orch.configure_modular_rag(Router(), Evaluator())
+        base_orch.configure_modular_rag(Router(cfg.modular_rag.router), Evaluator())
         log.info("[navigator] modular RAG enabled (max_iterations=%d)", cfg.modular_rag.loop.max_iterations)
 
     # Build orchestrator based on mode

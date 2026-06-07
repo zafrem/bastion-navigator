@@ -109,6 +109,17 @@ class LoopConfig(BaseModel):
 
 class RouterConfig(BaseModel):
     routing_threshold: float = 0.25
+    # FR-MR-01-003: when True, collection selection scores each collection by
+    # cosine similarity between the query embedding and the collection's topic
+    # centroid (maintained at index time). When False, the keyword proxy is used.
+    use_embedding_affinity: bool = False
+    # Per-tenant routing_threshold overrides (tenant_id → threshold).
+    tenant_thresholds: dict[str, float] = Field(default_factory=dict)
+    # Intent-classification regex overrides. Empty → router module defaults.
+    analytical_pattern: str = ""
+    procedural_pattern: str = ""
+    multi_hop_pattern: str = ""
+    factual_pattern: str = ""
 
 
 class HyDEConfig(BaseModel):
@@ -157,6 +168,26 @@ class ConnectorConfig(BaseModel):
 class DecomposerConfig(BaseModel):
     enabled: bool = True
     max_sub_queries: int = 4
+    # Sub-query split regex overrides. Empty → decomposer module defaults.
+    conjunction_en_pattern: str = ""
+    conjunction_kr_pattern: str = ""
+    temporal_pattern: str = ""
+    sentence_separator_pattern: str = ""
+
+
+class TokenRewriterConfig(BaseModel):
+    # Vault-token detection regex (2 groups: kind, hex suffix).
+    # Empty → token_rewriter module default.
+    token_pattern: str = ""
+
+
+class ChunkingConfig(BaseModel):
+    # Markdown structural regex overrides used by the chunker.
+    # Empty → chunker module defaults.
+    heading_pattern: str = ""
+    table_row_pattern: str = ""
+    fence_pattern: str = ""
+    link_pattern: str = ""
 
 
 class Config(BaseModel):
@@ -176,6 +207,8 @@ class Config(BaseModel):
     modular_rag: ModularRAGConfig = Field(default_factory=ModularRAGConfig)
     connector: ConnectorConfig = Field(default_factory=ConnectorConfig)
     decomposer: DecomposerConfig = Field(default_factory=DecomposerConfig)
+    token_rewriter: TokenRewriterConfig = Field(default_factory=TokenRewriterConfig)
+    chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
 
     @classmethod
     def load(cls, path: str) -> "Config":

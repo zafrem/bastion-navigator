@@ -24,9 +24,11 @@ _DATA_DIR = (
 )
 
 # EMAIL_honey must precede EMAIL in the alternation so it wins over the shorter match.
-_RE_TOKEN = re.compile(
-    r'\b(KR_NAME|EMAIL_honey|EMAIL|MOBILE|RRN_TOKEN|EMP|WRK)_([0-9a-f]{6})\b'
-)
+# Overridable via TokenRewriterConfig.token_pattern (token_rewriter.token_pattern
+# in config.yaml). The pattern must expose two capture groups: token kind and hex suffix.
+DEFAULT_TOKEN_PATTERN = r'\b(KR_NAME|EMAIL_honey|EMAIL|MOBILE|RRN_TOKEN|EMP|WRK)_([0-9a-f]{6})\b'
+
+_RE_TOKEN = re.compile(DEFAULT_TOKEN_PATTERN)
 
 
 def _load_csv(path: Path, col: str) -> list[str]:
@@ -51,16 +53,23 @@ class TokenRewriter:
     derived from the hex suffix alone, so repeated searches produce stable context.
     """
 
-    def __init__(self, data_dir: Optional[Path] = None) -> None:
+    def __init__(self, data_dir: Optional[Path] = None, token_pattern: str = "") -> None:
         d = Path(data_dir) if data_dir else _DATA_DIR
         self._en_given = _load_csv(d / "en_given_names.csv", "name")
         self._en_sur   = _load_csv(d / "en_surnames.csv", "surname")
         self._kr_given = _load_csv(d / "kr_given_names.csv", "given_name")
         self._kr_sur   = _load_csv(d / "kr_surnames.csv", "surname")
+        # Empty/invalid override falls back to the built-in default pattern.
+        self._re_token = _RE_TOKEN
+        if token_pattern:
+            try:
+                self._re_token = re.compile(token_pattern)
+            except re.error:
+                log.warning("[token_rewriter] invalid token_pattern override; using default")
 
     def rewrite_text(self, text: str) -> str:
         """Replace all Vault tokens in *text* with faker pseudonyms in-place."""
-        return _RE_TOKEN.sub(lambda m: self._replace(m.group(1), m.group(2)), text)
+        return self._re_token.sub(lambda m: self._replace(m.group(1), m.group(2)), text)
 
     def _replace(self, kind: str, hex_sfx: str) -> str:
         if kind == "KR_NAME":
