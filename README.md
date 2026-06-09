@@ -23,51 +23,39 @@ Navigator is composed of several internal components:
 
 ## Getting Started
 
+> Navigator ships as a **Python / FastAPI** service — the canonical implementation driven by the `Makefile` and `config/config.yaml`. A secondary Go implementation also lives under `cmd/navigator-cli`.
+
 ### Prerequisites
-- Go 1.21+
-- Qdrant 1.10+
-- Embedding & Reranker services (BGE models)
-- Redis (Optional, for caching)
+- Python 3.11+
+- (Optional) Qdrant 1.10+ for vector storage — without it Navigator falls back to an in-memory mock searcher
+- (Optional) Redis for the embedding cache; (Optional) NATS for event streaming
+- Embedding/reranker models `BAAI/bge-m3` and `BAAI/bge-reranker-v2-m3` are downloaded on first run when `embedder.type: local` — set `embedder.type: mock` in the config for a lightweight, dependency-free run
 
-### Build
-To build the `navigator-cli` binary:
+### Install
 ```bash
-make build
+make install          # = pip install -e .
+# dev extras: make install-dev   (= pip install -e ".[dev]")
 ```
+Using a virtual environment is recommended (`python -m venv .venv && . .venv/bin/activate`).
 
-### Installation & Execution
-You can run Navigator in standalone mode for testing or with a configuration file for production.
-
-**Standalone Mode (Testing):**
+### Run
 ```bash
-make run-standalone
+make run              # = python -m navigator.main --config config/config.yaml
+# or: make dev
 ```
-
-**Production Mode:**
-```bash
-make run-server
-```
-
-**Interactive Search (CLI):**
-```bash
-make interactive
-```
-
-**Docker:**
-```bash
-make docker-up
-```
+Navigator starts the REST API on **:8082** and gRPC on **:9092**.
 
 ### Development
-- `make test`: Run all tests.
-- `make lint`: Run golangci-lint.
-- `make generate`: Generate gRPC code from proto files.
+- `make test`   — pytest suite
+- `make lint`   — ruff check
+- `make format` — ruff format
+- `make docker-up` / `make docker-down` — run the stack with Docker Compose
 
 ## API Interfaces
-Navigator provides multiple interfaces:
-- **gRPC:** Port 9090 (Default)
-- **REST API:** Port 8080 (Default)
-- **Metrics:** Port 9091 (Prometheus)
+- **REST API:** `:8082` — `/v1/navigator/search`, `/v1/navigator/search/hybrid`, `/v1/navigator/index`, `/v1/navigator/embed`, `/v1/navigator/rerank`, …
+- **gRPC:** `:9092`
+- **Health:** `GET /v1/health`
+- **Metrics:** Prometheus at `GET /v1/metrics`
 
 ## Documentation
 - [Design Document](DESIGN.md)
