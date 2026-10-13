@@ -85,6 +85,8 @@ type SearchDefaultsConfig struct {
 type VaultConfig struct {
 	Enabled           bool          `yaml:"enabled"`
 	Endpoint          string        `yaml:"endpoint"`
+	AuthToken         string        `yaml:"auth_token"`      // service JWT for the Vault REST API (or env NAVIGATOR_VAULT_AUTH_TOKEN)
+	AuthTokenFile     string        `yaml:"auth_token_file"` // re-read on every call; takes precedence over auth_token
 	CachePermissions  bool          `yaml:"cache_permissions"`
 	PermissionTTL     time.Duration `yaml:"permission_ttl"`
 }

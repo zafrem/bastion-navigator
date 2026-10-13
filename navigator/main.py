@@ -59,7 +59,15 @@ def main() -> None:
         log.warning("[navigator] qdrant unavailable (%s), using mock searcher", exc)
         searcher = MockSearcher()
 
-    vault = VaultClient(cfg.vault.endpoint) if cfg.vault.enabled else NoopVaultClient()
+    vault = (
+        VaultClient(
+            cfg.vault.endpoint,
+            auth_token=cfg.vault.auth_token,
+            auth_token_file=cfg.vault.auth_token_file,
+        )
+        if cfg.vault.enabled
+        else NoopVaultClient()
+    )
 
     pub = Publisher(cfg.events.nats_url)
     rewriter = TokenRewriter(token_pattern=cfg.token_rewriter.token_pattern)

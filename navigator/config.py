@@ -66,6 +66,10 @@ class SearchDefaultsConfig(BaseModel):
 class VaultConfig(BaseModel):
     enabled: bool = False
     endpoint: str = "http://localhost:8081"
+    # Service credentials for the Vault REST API (a JWT Vault accepts). Prefer auth_token_file
+    # (re-read on every call, so rotation needs no restart) or the NAVIGATOR_VAULT_AUTH_TOKEN env var.
+    auth_token: str = ""
+    auth_token_file: str = ""
     cache_permissions: bool = True
     permission_ttl_seconds: int = 300
 

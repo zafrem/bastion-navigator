@@ -174,7 +174,12 @@ func buildOrchestratorFromConfig(cfg *config.Config) (*orchestrator.Orchestrator
 	// Vault
 	var vlt vault.Client
 	if cfg.Vault.Enabled && cfg.Vault.Endpoint != "" {
-		vlt = vault.NewHTTP(cfg.Vault.Endpoint, c, cfg.Vault.PermissionTTL)
+		token := cfg.Vault.AuthToken
+		if token == "" {
+			token = os.Getenv("NAVIGATOR_VAULT_AUTH_TOKEN")
+		}
+		vlt = vault.NewHTTP(cfg.Vault.Endpoint, c, cfg.Vault.PermissionTTL,
+			vault.WithToken(token), vault.WithTokenFile(cfg.Vault.AuthTokenFile))
 	} else {
 		vlt = vault.NewMock()
 	}

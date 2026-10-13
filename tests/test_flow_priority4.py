@@ -110,7 +110,7 @@ class PassthroughReranker:
 
 
 class AllowAllVault:
-    def allowed_categories(self, user_id):
+    def allowed_categories(self, user_id, **_):
         return None
 
 

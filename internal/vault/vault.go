@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/zafrem/bastion-navigator/internal/cache"
@@ -21,20 +24,59 @@ type Client interface {
 // --- HTTP client ---
 
 type httpClient struct {
-	endpoint string
-	cache    cache.Cache
-	ttl      time.Duration
-	http     *http.Client
+	endpoint  string
+	cache     cache.Cache
+	ttl       time.Duration
+	http      *http.Client
+	token     string
+	tokenFile string
 }
 
+// Option configures the HTTP client.
+type Option func(*httpClient)
+
+// WithToken sets the service JWT sent as "Authorization: Bearer <token>".
+func WithToken(token string) Option { return func(c *httpClient) { c.token = token } }
+
+// WithTokenFile reads the service JWT from a file on every call, so rotation needs no restart.
+// It takes precedence over WithToken; an unreadable or empty file is an error (Vault is not called).
+func WithTokenFile(path string) Option { return func(c *httpClient) { c.tokenFile = path } }
+
 // NewHTTP returns a Vault Client that calls the Bastion Vault REST API.
-func NewHTTP(endpoint string, c cache.Cache, permTTL time.Duration) Client {
-	return &httpClient{
-		endpoint: endpoint,
+func NewHTTP(endpoint string, c cache.Cache, permTTL time.Duration, opts ...Option) Client {
+	h := &httpClient{
+		endpoint: strings.TrimRight(endpoint, "/"),
 		cache:    c,
 		ttl:      permTTL,
 		http:     &http.Client{Timeout: 5 * time.Second},
 	}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
+}
+
+// authToken returns the current service token ("" when none is configured).
+func (v *httpClient) authToken() (string, error) {
+	if v.tokenFile != "" {
+		b, err := os.ReadFile(v.tokenFile)
+		if err != nil {
+			return "", fmt.Errorf("vault: cannot read token file: %w", err)
+		}
+		tok := strings.TrimSpace(string(b))
+		if tok == "" {
+			return "", fmt.Errorf("vault: token file is empty")
+		}
+		return tok, nil
+	}
+	return v.token, nil
+}
+
+// Vault reports data categories as IDs; Navigator names them by content.
+var vaultCategoryNames = map[string]string{
+	"DC-01": "customer_data",
+	"DC-02": "manufacturing_data",
+	"DC-03": "hr_data",
 }
 
 func (v *httpClient) AllowedCategories(ctx context.Context, userID string) ([]string, error) {
@@ -47,10 +89,18 @@ func (v *httpClient) AllowedCategories(ctx context.Context, userID string) ([]st
 			}
 		}
 	}
-	url := fmt.Sprintf("%s/v1/vault/access/categories?user_id=%s", v.endpoint, userID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	token, err := v.authToken()
 	if err != nil {
 		return nil, err
+	}
+	// Note: with only a user ID, Vault answers using the *token's* own department and role.
+	endpoint := fmt.Sprintf("%s/v1/vault/permissions/%s", v.endpoint, url.PathEscape(userID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := v.http.Do(req)
 	if err != nil {
@@ -61,17 +111,27 @@ func (v *httpClient) AllowedCategories(ctx context.Context, userID string) ([]st
 		return nil, fmt.Errorf("vault AllowedCategories: HTTP %d", resp.StatusCode)
 	}
 	var result struct {
-		Categories []string `json:"categories"`
+		Allowed *[]string `json:"allowed_categories"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
+	if result.Allowed == nil {
+		return nil, fmt.Errorf("vault AllowedCategories: response has no allowed_categories")
+	}
+	cats := make([]string, 0, len(*result.Allowed))
+	for _, id := range *result.Allowed {
+		if name, ok := vaultCategoryNames[id]; ok {
+			id = name
+		}
+		cats = append(cats, id)
+	}
 	if v.cache != nil {
-		if b, err := json.Marshal(result.Categories); err == nil {
+		if b, err := json.Marshal(cats); err == nil {
 			v.cache.Set(cacheKey, b)
 		}
 	}
-	return result.Categories, nil
+	return cats, nil
 }
 
 func (v *httpClient) FilterResults(results []models.SearchResult, categories []string) ([]models.SearchResult, int) {

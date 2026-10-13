@@ -1,6 +1,7 @@
 """15-step search pipeline (SRS §6.3)."""
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Optional
@@ -12,7 +13,7 @@ from .config import Config, SearchDefaultsConfig
 from .embedder import Embedder
 from .reranker import Reranker
 from .searcher import QdrantSearcher, MockSearcher
-from .vault_client import VaultClient, NoopVaultClient
+from .vault_client import VaultClient, NoopVaultClient, VaultUnavailable
 from .token_rewriter import TokenRewriter
 from .router import Router, RoutingDecision, QueryIntent
 from .evaluator import Evaluator, EvaluatorConfig, QualityVerdict
@@ -33,6 +34,8 @@ from .events import (
     event_steward_purposes_updated,
 )
 from . import metrics
+
+log = logging.getLogger(__name__)
 
 # Maps data category → Qdrant collection name.
 _CATEGORY_TO_COLLECTION: dict[str, str] = {
@@ -465,11 +468,23 @@ class Orchestrator:
         user_id = req.user.user_id if req.user else ""
         if not user_id:
             return None
-        return self._vault.allowed_categories(user_id)
+        try:
+            return self._vault.allowed_categories(
+                user_id,
+                tenant_id=req.tenant_id,
+                department=req.user.department,
+                roles=list(req.user.roles),
+            )
+        except VaultUnavailable as exc:
+            # Fail closed: if Vault cannot be consulted, search nothing rather than everything.
+            log.warning("[orchestrator] Vault permission lookup failed for %s, denying access: %s", user_id, exc)
+            return []
 
     def _collections_for_categories(self, allowed: Optional[list[str]]) -> list[str]:
-        if not allowed:
+        if allowed is None:
+            # No permission information (Vault disabled): unrestricted.
             return list(self._cfg.vector_db.collections.keys()) or list(_CATEGORY_TO_COLLECTION.values())
+        # A list, even an empty one, is a decision: only the collections it names, never "all".
         seen: set[str] = set()
         out: list[str] = []
         for cat in allowed:
@@ -477,7 +492,7 @@ class Orchestrator:
             if col and col not in seen:
                 seen.add(col)
                 out.append(col)
-        return out or list(_CATEGORY_TO_COLLECTION.values())
+        return out
 
     # ── sub-query decomposition (MR-02-003) ──────────────────────────────────
 

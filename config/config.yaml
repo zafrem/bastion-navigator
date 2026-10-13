@@ -62,6 +62,12 @@ search_defaults:
 vault:
   enabled: true
   endpoint: http://vault:8081
+  # Service credentials: a JWT that Vault accepts (HS256, its issuer, with an exp claim).
+  # Prefer auth_token_file (re-read on every call, so rotation needs no restart) or set the
+  # NAVIGATOR_VAULT_AUTH_TOKEN environment variable; avoid committing a token here.
+  # If Vault cannot be reached or rejects the token, Navigator denies access (searches nothing).
+  auth_token_file: ""
+  auth_token: ""
   cache_permissions: true
   permission_ttl_seconds: 300
 
