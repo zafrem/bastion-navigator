@@ -463,22 +463,38 @@ class Orchestrator:
         return _rrf(vector_results, sparse_results)
 
     def _resolve_permissions(self, req: SearchRequest) -> Optional[list[str]]:
-        if req.user and req.user.allowed_categories:
-            return req.user.allowed_categories
-        user_id = req.user.user_id if req.user else ""
-        if not user_id:
-            return None
+        """Data categories the caller's user may search; ``None`` means unrestricted.
+
+        Vault is authoritative. A caller-supplied ``user.allowed_categories`` can only NARROW what
+        Vault allows, unless ``server.trust_caller_permissions`` is on (startup requires callers to
+        be authenticated for that), in which case an authenticated orchestrator vouches for it.
+        A request with no user is unrestricted only when Vault is disabled.
+        """
+        user = req.user
+        supplied = list(user.allowed_categories) if user and user.allowed_categories else []
+        if supplied and self._cfg.server.trust_caller_permissions:
+            return supplied
+
+        user_id = user.user_id if user else ""
         try:
-            return self._vault.allowed_categories(
+            vault_allowed = self._vault.allowed_categories(
                 user_id,
                 tenant_id=req.tenant_id,
-                department=req.user.department,
-                roles=list(req.user.roles),
+                department=user.department if user else "",
+                roles=list(user.roles) if user else [],
             )
         except VaultUnavailable as exc:
             # Fail closed: if Vault cannot be consulted, search nothing rather than everything.
             log.warning("[orchestrator] Vault permission lookup failed for %s, denying access: %s", user_id, exc)
             return []
+
+        if vault_allowed is None:
+            # Vault is disabled: there is no permission model, so only the caller's own restriction applies.
+            return supplied or None
+        if not supplied:
+            return vault_allowed
+        allowed = set(vault_allowed)
+        return [c for c in supplied if c in allowed]
 
     def _collections_for_categories(self, allowed: Optional[list[str]]) -> list[str]:
         if allowed is None:

@@ -236,8 +236,56 @@ def test_orchestrator_passes_tenant_department_and_roles_to_vault():
     assert vault.calls == [("alice", {"tenant_id": "acme", "department": "marketing", "roles": ["manager"]})]
 
 
-def test_explicit_allowed_categories_still_bypass_vault():
+def test_caller_supplied_categories_can_only_narrow_never_widen():
+    # Vault says customer only; the caller claims hr as well. Vault stays authoritative.
+    vault = _FakeVault(result=["customer_data"])
+    orch, _ = _orch(vault)
+    assert orch._resolve_permissions(_req(allowed_categories=["hr_data", "customer_data"])) == ["customer_data"]
+    assert orch._resolve_permissions(_req(allowed_categories=["hr_data"])) == []
+    assert len(vault.calls) == 2  # Vault was consulted; the claim did not bypass it
+
+
+def test_caller_may_narrow_what_vault_allows():
+    orch, _ = _orch(_FakeVault(result=["customer_data", "hr_data"]))
+    assert orch._resolve_permissions(_req(allowed_categories=["hr_data"])) == ["hr_data"]
+
+
+def test_vault_outage_denies_even_when_the_caller_supplies_categories():
+    orch, _ = _orch(_FakeVault(exc=VaultUnavailable("down")))
+    assert orch._resolve_permissions(_req(allowed_categories=["hr_data"])) == []
+
+
+def test_trusted_caller_categories_bypass_vault_only_when_explicitly_enabled():
     vault = _FakeVault(result=[])
     orch, _ = _orch(vault)
+    orch._cfg.server.trust_caller_permissions = True
     assert orch._resolve_permissions(_req(allowed_categories=["hr_data"])) == ["hr_data"]
     assert vault.calls == []
+
+
+def test_vault_disabled_caller_categories_still_restrict():
+    orch, _ = _orch(NoopVaultClient())
+    assert orch._resolve_permissions(_req(allowed_categories=["hr_data"])) == ["hr_data"]
+
+
+def test_request_without_a_user_is_denied_when_vault_enforces_permissions():
+    def anonymous():
+        return SearchRequest(request_id="r2", tenant_id="acme", query="q", options=SearchOptions(top_k=3))
+
+    http = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json={"allowed_categories": ["DC-01"]})))
+    orch, searcher = _orch(VaultClient("http://vault:8081", client=http, auth_token="t"))
+    assert orch._collections_for_categories(orch._resolve_permissions(anonymous())) == []
+    orch.search(anonymous())
+    assert searcher.searched == []
+
+
+def test_request_without_a_user_is_unrestricted_when_vault_is_disabled():
+    orch, _ = _orch(NoopVaultClient())
+    req = SearchRequest(request_id="r3", tenant_id="acme", query="q", options=SearchOptions(top_k=3))
+    assert orch._resolve_permissions(req) is None
+
+
+def test_anonymous_lookup_does_not_ask_vault():
+    rec = Recorder()
+    assert _client(rec, auth_token="t").allowed_categories("") == []
+    assert rec.requests == []

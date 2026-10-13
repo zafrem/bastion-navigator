@@ -3,11 +3,20 @@ from __future__ import annotations
 import yaml
 from pydantic import BaseModel, Field
 
+from .auth import resolve_token
+
 
 class ServerConfig(BaseModel):
     rest_port: int = 8082
     grpc_port: int = 9092
     workers: int = 4
+    # Shared bearer token callers must present on REST and gRPC (or env NAVIGATOR_AUTH_TOKEN).
+    # Empty = unauthenticated (development only; a warning is logged at startup).
+    auth_token: str = ""
+    # When true, a caller-supplied user.allowed_categories is authoritative (an authenticated
+    # orchestrator already resolved it with Vault). When false (default) it can only NARROW what
+    # Vault allows. Requires auth_token: trusting unauthenticated callers is refused at startup.
+    trust_caller_permissions: bool = False
 
 
 class HNSWConfig(BaseModel):
@@ -89,6 +98,7 @@ class EventsConfig(BaseModel):
 class PeerConfig(BaseModel):
     id: str
     endpoint: str
+    auth_token: str = ""   # token presented to this peer; defaults to server.auth_token
     topic_affinity: list[str] = Field(default_factory=list)
     capability: str = "search"   # "search" | "agent"
 
@@ -222,3 +232,11 @@ class Config(BaseModel):
             return cls.model_validate(data or {})
         except FileNotFoundError:
             return cls()
+
+    def validate_security(self) -> None:
+        """Refuse configurations that trust callers Navigator never authenticated."""
+        if self.server.trust_caller_permissions and not resolve_token(self.server.auth_token):
+            raise ValueError(
+                "server.trust_caller_permissions requires server.auth_token (or NAVIGATOR_AUTH_TOKEN): "
+                "caller-supplied permissions are only trustworthy from an authenticated caller"
+            )

@@ -9,6 +9,7 @@ from typing import Any
 
 import grpc
 
+from .auth import GRPC_SERVICE_NAMES, GrpcAuthInterceptor, resolve_token
 from .config import Config
 from .orchestrator import Orchestrator
 from .events import (
@@ -63,16 +64,23 @@ class _NavigatorServiceHandler(grpc.GenericRpcHandler):
         self._orch = orch
         self._pub = pub
         self._hm = hm
+        methods = {
+            "Search": self._search,
+            "SearchWithPermissions": self._search_with_permissions,
+            "HybridSearch": self._hybrid_search,
+            "BatchSearch": self._batch_search,
+            "Embed": self._embed,
+            "BatchEmbed": self._batch_embed,
+            "Rerank": self._rerank,
+            "GetCollections": self._get_collections,
+            "Health": self._health,
+        }
+        # Served under the proto's canonical service name (what federation peers call) and the
+        # legacy "navigator.NavigatorService" name this server originally registered.
         self._routes = {
-            "/navigator.NavigatorService/Search": self._search,
-            "/navigator.NavigatorService/SearchWithPermissions": self._search_with_permissions,
-            "/navigator.NavigatorService/HybridSearch": self._hybrid_search,
-            "/navigator.NavigatorService/BatchSearch": self._batch_search,
-            "/navigator.NavigatorService/Embed": self._embed,
-            "/navigator.NavigatorService/BatchEmbed": self._batch_embed,
-            "/navigator.NavigatorService/Rerank": self._rerank,
-            "/navigator.NavigatorService/GetCollections": self._get_collections,
-            "/navigator.NavigatorService/Health": self._health,
+            f"/{svc}/{name}": fn
+            for svc in GRPC_SERVICE_NAMES
+            for name, fn in methods.items()
         }
 
     def service_name(self) -> str:
@@ -215,18 +223,27 @@ class _NavigatorServiceHandler(grpc.GenericRpcHandler):
 
 
 class GRPCServer:
-    def __init__(self, orch: Orchestrator, pub: Publisher, hm: HookManager) -> None:
+    def __init__(self, orch: Orchestrator, pub: Publisher, hm: HookManager, auth_token: str = "") -> None:
         self._orch = orch
         self._pub = pub
         self._hm = hm
+        self._auth_token = resolve_token(auth_token)
         self._server: grpc.Server | None = None
 
     def hooks(self) -> HookManager:
         return self._hm
 
+    def _make_server(self) -> grpc.Server:
+        """Build the server (not started): handlers plus the caller-authentication interceptor."""
+        interceptors = [GrpcAuthInterceptor(self._auth_token)] if self._auth_token else []
+        server = grpc.server(futures.ThreadPoolExecutor(max_workers=10), interceptors=interceptors)
+        server.add_generic_rpc_handlers([_NavigatorServiceHandler(self._orch, self._pub, self._hm)])
+        if not self._auth_token:
+            log.warning("[grpc] no auth token configured: the gRPC API accepts unauthenticated callers")
+        return server
+
     def serve(self, port: int) -> None:
-        self._server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-        self._server.add_generic_rpc_handlers([_NavigatorServiceHandler(self._orch, self._pub, self._hm)])
+        self._server = self._make_server()
         self._server.add_insecure_port(f"[::]:{port}")
         self._server.start()
         log.info("[grpc] navigator listening on :%d", port)

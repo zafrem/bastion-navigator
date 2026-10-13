@@ -31,6 +31,7 @@ class PeerConfig:
     endpoint: str
     topic_affinity: list[str] = field(default_factory=list)
     capability: str = "search"          # "search" | "agent"
+    auth_token: str = field(default="", repr=False)   # bearer token presented to this peer
     affinity_embedding: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
 
 
@@ -143,11 +144,18 @@ class PeerClient:
             log.warning("federation: peer %s error: %s", self._peer.id, exc)
             return None
 
-    async def _do_search(self, req: SearchRequest, hop_depth: int) -> SearchResponse:
+    def _call_metadata(self, hop_depth: int) -> list[tuple[str, str]]:
+        """Loop-prevention headers, plus the bearer token the peer requires (if any)."""
         metadata = [
             (_HEADER_ORIGIN_ID, self._own_id),
             (_HEADER_HOP_DEPTH, str(hop_depth)),
         ]
+        if self._peer.auth_token:
+            metadata.append(("authorization", f"Bearer {self._peer.auth_token}"))
+        return metadata
+
+    async def _do_search(self, req: SearchRequest, hop_depth: int) -> SearchResponse:
+        metadata = self._call_metadata(hop_depth)
         channel = grpc.aio.insecure_channel(self._peer.endpoint)
         try:
             payload = json.dumps(req.model_dump()).encode()

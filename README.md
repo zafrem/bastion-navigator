@@ -68,7 +68,24 @@ The `NAVIGATOR_VAULT_AUTH_TOKEN` environment variable is used when neither is se
 - **Fails closed.** If Vault cannot be reached, rejects the token, or returns something unexpected, Navigator searches no collections instead of all of them. An empty permission list from Vault likewise means no access.
 - **Per-user decisions.** Navigator sends the request's `department` and `roles` (and `tenant_id`) so Vault decides for the user, not for the service identity. A request with a `user_id` but no department or role is denied, and Vault is not asked. Several roles are unioned.
 - **Categories.** Vault's `DC-01`, `DC-02` and `DC-03` map to `customer_data`, `manufacturing_data` and `hr_data`.
-- `user.allowed_categories` supplied in the request still bypasses the Vault lookup (the caller is trusted to have resolved it).
+- **Caller-supplied categories can only narrow.** A `user.allowed_categories` in the request is intersected with what Vault allows, so it can restrict a user but never grant more. See `server.trust_caller_permissions` below for the opt-in exception.
+- **No user means no access.** With Vault enabled, a request without a `user_id` is denied. It is unrestricted only when Vault is disabled (there is then no permission model).
+
+## Authenticating callers
+
+Navigator acts on the tenant, user, department and roles a caller asserts, so *who may call it* is the control that matters. Set a shared bearer token:
+
+```yaml
+server:
+  auth_token: ""                  # or env NAVIGATOR_AUTH_TOKEN; use a long random value
+  trust_caller_permissions: false # see below
+```
+
+With a token set, every REST and gRPC call must send `Authorization: Bearer <token>` (gRPC: `authorization` metadata) and otherwise gets `401` / `UNAUTHENTICATED`. This covers search, embed, rerank and the **index** (write) endpoints. The probes (`/v1/health*`, `/v1/metrics`, the gRPC `Health` RPC) stay public. Without a token Navigator accepts unauthenticated callers and logs a warning, which is for development only.
+
+**`trust_caller_permissions`** (default `false`). When true, a caller's `user.allowed_categories` is authoritative: use it when an authenticated orchestrator has already resolved permissions with Vault and calls `/v1/navigator/search/with-permissions`. Navigator refuses to start with it enabled unless an auth token is set, because trusting the categories only makes sense from a caller you have authenticated. Leave it off to have Navigator re-check every request against Vault.
+
+**Federation.** Peers authenticate to each other the same way. A peer entry may set `auth_token`; otherwise this node's `server.auth_token` is sent. The gRPC server answers under the proto's canonical service name (`bastion.navigator.v1.NavigatorService`, which federation calls) and the legacy `navigator.NavigatorService`.
 
 ## API Interfaces
 - **REST API:** `:8082` — `/v1/navigator/search`, `/v1/navigator/search/hybrid`, `/v1/navigator/index`, `/v1/navigator/embed`, `/v1/navigator/rerank`, …

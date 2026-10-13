@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from starlette.responses import Response
 
+from .auth import PUBLIC_REST_PATHS, resolve_token, token_matches
 from .config import Config
 from .orchestrator import Orchestrator
 from .events import (
@@ -67,6 +69,24 @@ def _is_federation_mode(orch) -> bool:
 
 def build_app(cfg: Config, orch: Orchestrator, pub: Publisher, hm: HookManager) -> FastAPI:
     app = FastAPI(title="Bastion Navigator", version="2.0.0")
+
+    # ── caller authentication ───────────────────────────────────────────────
+    # Navigator trusts the tenant/user a caller asserts, so only callers holding the shared token
+    # may use it (health and metrics probes excepted).
+    auth_token = resolve_token(cfg.server.auth_token)
+    if auth_token:
+        @app.middleware("http")
+        async def require_bearer_token(request: Request, call_next):
+            if request.url.path in PUBLIC_REST_PATHS or token_matches(request.headers.get("authorization"), auth_token):
+                return await call_next(request)
+            return JSONResponse(
+                {"detail": "missing or invalid bearer token"},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer realm="navigator"'},
+            )
+    else:
+        log.warning("[navigator] no auth token configured (server.auth_token / NAVIGATOR_AUTH_TOKEN): "
+                    "the REST API accepts unauthenticated callers")
 
     # ── health ──────────────────────────────────────────────────────────────
 

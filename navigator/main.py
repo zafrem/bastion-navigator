@@ -22,6 +22,7 @@ from .federation import (
     PeerConfig as _PeerCfg,
     build_federated_orchestrator,
 )
+from .auth import resolve_token
 from .events import Publisher
 from .hooks import HookManager
 from .rest import build_app
@@ -46,6 +47,10 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = Config.load(args.config)
+    try:
+        cfg.validate_security()
+    except ValueError as exc:
+        raise SystemExit(f"refusing to start: {exc}")
     log.info("[navigator] starting v%s mode=%s (REST :%d, gRPC :%d)",
              cfg.version, cfg.mode, cfg.server.rest_port, cfg.server.grpc_port)
 
@@ -93,6 +98,9 @@ def main() -> None:
                     endpoint=p.endpoint,
                     topic_affinity=p.topic_affinity,
                     capability=p.capability,
+                    # Peers are authenticated like any other caller: use the peer's own token,
+                    # else this node's shared token.
+                    auth_token=p.auth_token or resolve_token(cfg.server.auth_token),
                 )
                 for p in cfg.federation.peers
             ],
@@ -106,7 +114,7 @@ def main() -> None:
     hm = HookManager()
 
     # gRPC in background thread
-    grpc_srv = GRPCServer(orch, pub, hm)
+    grpc_srv = GRPCServer(orch, pub, hm, auth_token=cfg.server.auth_token)
     grpc_thread = threading.Thread(
         target=grpc_srv.serve,
         args=(cfg.server.grpc_port,),

@@ -92,6 +92,8 @@ class VaultClient:
 
         Raises VaultUnavailable when Vault cannot be consulted.
         """
+        if not user_id:
+            return []  # no identity: nothing to look up, and nothing to grant
         roles = [r for r in (roles or ()) if r]
         if not department or not roles:
             log.warning("[vault_client] no department/role for %s: cannot determine permissions, denying", user_id)
