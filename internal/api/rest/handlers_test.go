@@ -8,9 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bastion/navigator/internal/config"
-	"github.com/bastion/navigator/internal/models"
-	"github.com/bastion/navigator/internal/orchestrator"
+	"github.com/zafrem/bastion-navigator/internal/config"
+	"github.com/zafrem/bastion-navigator/internal/models"
+	"github.com/zafrem/bastion-navigator/internal/orchestrator"
 )
 
 // ─── Stubs reused from orchestrator tests ─────────────────────────────────────

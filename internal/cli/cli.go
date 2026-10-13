@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/bastion/navigator/internal/models"
-	"github.com/bastion/navigator/internal/orchestrator"
+	"github.com/zafrem/bastion-navigator/internal/models"
+	"github.com/zafrem/bastion-navigator/internal/orchestrator"
 )
 
 // Build returns a *cobra.Command whose sub-commands use orch to search,

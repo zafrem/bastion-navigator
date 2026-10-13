@@ -11,7 +11,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/bastion/navigator/internal/orchestrator"
+	"github.com/zafrem/bastion-navigator/internal/orchestrator"
 )
 
 // Server is the HTTP REST API server.

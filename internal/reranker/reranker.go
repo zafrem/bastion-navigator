@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bastion/navigator/internal/models"
+	"github.com/zafrem/bastion-navigator/internal/models"
 )
 
 // Reranker re-scores candidate search results relative to a query.

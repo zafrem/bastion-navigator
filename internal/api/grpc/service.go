@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/bastion/navigator/internal/models"
+	"github.com/zafrem/bastion-navigator/internal/models"
 )
 
 // NavigatorServiceServer is the server-side interface matching the proto definition.

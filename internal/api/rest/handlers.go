@@ -7,8 +7,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/bastion/navigator/internal/models"
-	"github.com/bastion/navigator/internal/orchestrator"
+	"github.com/zafrem/bastion-navigator/internal/models"
+	"github.com/zafrem/bastion-navigator/internal/orchestrator"
 )
 
 type handlers struct {

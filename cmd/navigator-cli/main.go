@@ -10,16 +10,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	grpcserver "github.com/bastion/navigator/internal/api/grpc"
-	"github.com/bastion/navigator/internal/api/rest"
-	"github.com/bastion/navigator/internal/cache"
-	"github.com/bastion/navigator/internal/cli"
-	"github.com/bastion/navigator/internal/config"
-	"github.com/bastion/navigator/internal/embedder"
-	"github.com/bastion/navigator/internal/orchestrator"
-	"github.com/bastion/navigator/internal/reranker"
-	"github.com/bastion/navigator/internal/searcher"
-	"github.com/bastion/navigator/internal/vault"
+	grpcserver "github.com/zafrem/bastion-navigator/internal/api/grpc"
+	"github.com/zafrem/bastion-navigator/internal/api/rest"
+	"github.com/zafrem/bastion-navigator/internal/cache"
+	"github.com/zafrem/bastion-navigator/internal/cli"
+	"github.com/zafrem/bastion-navigator/internal/config"
+	"github.com/zafrem/bastion-navigator/internal/embedder"
+	"github.com/zafrem/bastion-navigator/internal/orchestrator"
+	"github.com/zafrem/bastion-navigator/internal/reranker"
+	"github.com/zafrem/bastion-navigator/internal/searcher"
+	"github.com/zafrem/bastion-navigator/internal/vault"
 )
 
 var (

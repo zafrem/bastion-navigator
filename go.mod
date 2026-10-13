@@ -1,4 +1,4 @@
-module github.com/bastion/navigator
+module github.com/zafrem/bastion-navigator
 
 go 1.21
 

@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bastion/navigator/internal/config"
-	"github.com/bastion/navigator/internal/models"
+	"github.com/zafrem/bastion-navigator/internal/config"
+	"github.com/zafrem/bastion-navigator/internal/models"
 )
 
 // Embedder produces dense vector representations of text.

@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 
-	"github.com/bastion/navigator/internal/cache"
-	"github.com/bastion/navigator/internal/config"
+	"github.com/zafrem/bastion-navigator/internal/cache"
+	"github.com/zafrem/bastion-navigator/internal/config"
 )
 
 // Embedder converts text to dense float32 vectors.
@@ -110,6 +112,7 @@ func (e *bgeEmbedder) callEndpoint(ctx context.Context, texts []string) ([][]flo
 
 type mockEmbedder struct {
 	dim int
+	mu  sync.Mutex // rand.Rand is not safe for concurrent use
 	rng *rand.Rand
 }
 
@@ -132,16 +135,18 @@ func (m *mockEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float3
 
 func (m *mockEmbedder) randomVec() []float32 {
 	vec := make([]float32, m.dim)
-	var norm float32
+	var sumSq float64
+	m.mu.Lock()
 	for i := range vec {
-		v := float32(m.rng.NormFloat64())
-		vec[i] = v
-		norm += v * v
+		v := m.rng.NormFloat64()
+		vec[i] = float32(v)
+		sumSq += v * v
 	}
-	if norm > 0 {
-		norm = float32(1.0 / float64(norm))
+	m.mu.Unlock()
+	if sumSq > 0 {
+		inv := float32(1.0 / math.Sqrt(sumSq)) // divide by the L2 norm, not its square
 		for i := range vec {
-			vec[i] *= norm
+			vec[i] *= inv
 		}
 	}
 	return vec

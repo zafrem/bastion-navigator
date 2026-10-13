@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bastion/navigator/internal/models"
+	"github.com/zafrem/bastion-navigator/internal/models"
 )
 
 // Searcher queries a vector store for nearest neighbours.

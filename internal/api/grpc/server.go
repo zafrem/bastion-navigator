@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
-	"github.com/bastion/navigator/internal/models"
-	"github.com/bastion/navigator/internal/orchestrator"
+	"github.com/zafrem/bastion-navigator/internal/models"
+	"github.com/zafrem/bastion-navigator/internal/orchestrator"
 )
 
 // Server is the gRPC server for NavigatorService.

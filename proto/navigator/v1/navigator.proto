@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package bastion.navigator.v1;
 
-option go_package = "github.com/bastion/navigator/gen/navigator/v1;navigatorv1";
+option go_package = "github.com/zafrem/bastion-navigator/gen/navigator/v1;navigatorv1";
 
 service NavigatorService {
   // Main search operations

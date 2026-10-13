@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bastion/navigator/internal/cache"
-	"github.com/bastion/navigator/internal/models"
+	"github.com/zafrem/bastion-navigator/internal/cache"
+	"github.com/zafrem/bastion-navigator/internal/models"
 )
 
 // Client queries Vault for user permissions and filters search results.
