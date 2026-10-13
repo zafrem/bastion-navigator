@@ -311,7 +311,8 @@ def _split_oversized(
     try:
         from nltk.tokenize import sent_tokenize  # type: ignore
         sentences = sent_tokenize(text)
-    except LookupError:
+    except (ImportError, LookupError):
+        # nltk not installed, or punkt data not downloaded: use the hard-cut fallback.
         sentences = None
 
     if sentences:
