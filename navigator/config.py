@@ -11,8 +11,10 @@ class ServerConfig(BaseModel):
     grpc_port: int = 9092
     workers: int = 4
     # Shared bearer token callers must present on REST and gRPC (or env NAVIGATOR_AUTH_TOKEN).
-    # Empty = unauthenticated (development only; a warning is logged at startup).
+    # Required: Navigator refuses to start without it unless allow_unauthenticated is set.
     auth_token: str = ""
+    # Development only: start with no auth token and accept unauthenticated callers.
+    allow_unauthenticated: bool = False
     # When true, a caller-supplied user.allowed_categories is authoritative (an authenticated
     # orchestrator already resolved it with Vault). When false (default) it can only NARROW what
     # Vault allows. Requires auth_token: trusting unauthenticated callers is refused at startup.
@@ -234,9 +236,16 @@ class Config(BaseModel):
             return cls()
 
     def validate_security(self) -> None:
-        """Refuse configurations that trust callers Navigator never authenticated."""
-        if self.server.trust_caller_permissions and not resolve_token(self.server.auth_token):
+        """Refuse configurations that accept, or trust, callers Navigator never authenticated."""
+        has_token = bool(resolve_token(self.server.auth_token))
+        if self.server.trust_caller_permissions and not has_token:
             raise ValueError(
                 "server.trust_caller_permissions requires server.auth_token (or NAVIGATOR_AUTH_TOKEN): "
                 "caller-supplied permissions are only trustworthy from an authenticated caller"
+            )
+        if not has_token and not self.server.allow_unauthenticated:
+            raise ValueError(
+                "server.auth_token (or NAVIGATOR_AUTH_TOKEN) is required: Navigator acts on the tenant and "
+                "user a caller asserts, so it must authenticate its callers. For local development only, "
+                "set server.allow_unauthenticated: true"
             )

@@ -152,25 +152,51 @@ def test_peer_without_a_token_sends_no_authorization():
 
 # ─── startup validation ───────────────────────────────────────────────────────
 
+def test_startup_refuses_without_an_auth_token(monkeypatch):
+    monkeypatch.delenv("NAVIGATOR_AUTH_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="auth_token"):
+        Config().validate_security()
+
+
+def test_startup_accepts_a_configured_or_environment_token(monkeypatch):
+    monkeypatch.delenv("NAVIGATOR_AUTH_TOKEN", raising=False)
+    cfg = Config()
+    cfg.server.auth_token = TOKEN
+    cfg.validate_security()
+
+    monkeypatch.setenv("NAVIGATOR_AUTH_TOKEN", TOKEN)
+    Config().validate_security()
+
+
+def test_unauthenticated_mode_needs_an_explicit_dev_opt_in(monkeypatch):
+    monkeypatch.delenv("NAVIGATOR_AUTH_TOKEN", raising=False)
+    cfg = Config()
+    assert cfg.server.allow_unauthenticated is False  # secure by default
+    cfg.server.allow_unauthenticated = True
+    cfg.validate_security()
+
+
 def test_trusting_caller_permissions_requires_authenticated_callers(monkeypatch):
     monkeypatch.delenv("NAVIGATOR_AUTH_TOKEN", raising=False)
     cfg = Config()
     cfg.server.trust_caller_permissions = True
     with pytest.raises(ValueError, match="trust_caller_permissions"):
         cfg.validate_security()
+    # The dev opt-in does not make unauthenticated callers trustworthy.
+    cfg.server.allow_unauthenticated = True
+    with pytest.raises(ValueError, match="trust_caller_permissions"):
+        cfg.validate_security()
     cfg.server.auth_token = TOKEN
-    cfg.validate_security()  # fine
-
-
-def test_environment_token_also_satisfies_the_requirement(monkeypatch):
-    monkeypatch.setenv("NAVIGATOR_AUTH_TOKEN", TOKEN)
-    cfg = Config()
-    cfg.server.trust_caller_permissions = True
     cfg.validate_security()
 
 
-def test_default_config_is_valid_and_untrusting(monkeypatch):
+def test_default_config_does_not_trust_callers():
+    assert Config().server.trust_caller_permissions is False
+
+
+def test_the_shipped_sample_config_requires_the_operator_to_provide_a_token(monkeypatch):
     monkeypatch.delenv("NAVIGATOR_AUTH_TOKEN", raising=False)
-    cfg = Config()
-    assert cfg.server.trust_caller_permissions is False
-    cfg.validate_security()
+    cfg = Config.load("config/config.yaml")
+    assert cfg.server.auth_token == "" and cfg.server.allow_unauthenticated is False
+    with pytest.raises(ValueError):
+        cfg.validate_security()

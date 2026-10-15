@@ -51,6 +51,8 @@ def main() -> None:
         cfg.validate_security()
     except ValueError as exc:
         raise SystemExit(f"refusing to start: {exc}")
+    if cfg.server.allow_unauthenticated:
+        log.warning("[navigator] allow_unauthenticated is set: callers are NOT authenticated (development only)")
     log.info("[navigator] starting v%s mode=%s (REST :%d, gRPC :%d)",
              cfg.version, cfg.mode, cfg.server.rest_port, cfg.server.grpc_port)
 

@@ -12,6 +12,8 @@ services:
       - "9091:9091"
     environment:
       - CONFIG_PATH=/etc/navigator/config.yaml
+      # Required: callers must send this as 'Authorization: Bearer <token>' (e.g. openssl rand -hex 32)
+      - NAVIGATOR_AUTH_TOKEN=${NAVIGATOR_AUTH_TOKEN:?set NAVIGATOR_AUTH_TOKEN}
     volumes:
       - ./config:/etc/navigator
     depends_on:

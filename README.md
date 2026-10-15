@@ -77,11 +77,12 @@ Navigator acts on the tenant, user, department and roles a caller asserts, so *w
 
 ```yaml
 server:
-  auth_token: ""                  # or env NAVIGATOR_AUTH_TOKEN; use a long random value
+  auth_token: ""                  # REQUIRED, or env NAVIGATOR_AUTH_TOKEN; use a long random value
   trust_caller_permissions: false # see below
+  allow_unauthenticated: false    # development only: start with no token
 ```
 
-With a token set, every REST and gRPC call must send `Authorization: Bearer <token>` (gRPC: `authorization` metadata) and otherwise gets `401` / `UNAUTHENTICATED`. This covers search, embed, rerank and the **index** (write) endpoints. The probes (`/v1/health*`, `/v1/metrics`, the gRPC `Health` RPC) stay public. Without a token Navigator accepts unauthenticated callers and logs a warning, which is for development only.
+With a token set, every REST and gRPC call must send `Authorization: Bearer <token>` (gRPC: `authorization` metadata) and otherwise gets `401` / `UNAUTHENTICATED`. This covers search, embed, rerank and the **index** (write) endpoints. The probes (`/v1/health*`, `/v1/metrics`, the gRPC `Health` RPC) stay public. **Navigator refuses to start without a token** (`refusing to start: server.auth_token … is required`). For local development only, `server.allow_unauthenticated: true` starts it with no token and logs warnings that callers are not authenticated. `make start-navigator` generates a random token for each run; give callers the same value, or set `NAVIGATOR_AUTH_TOKEN` yourself.
 
 **`trust_caller_permissions`** (default `false`). When true, a caller's `user.allowed_categories` is authoritative: use it when an authenticated orchestrator has already resolved permissions with Vault and calls `/v1/navigator/search/with-permissions`. Navigator refuses to start with it enabled unless an auth token is set, because trusting the categories only makes sense from a caller you have authenticated. Leave it off to have Navigator re-check every request against Vault.
 
