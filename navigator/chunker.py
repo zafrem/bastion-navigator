@@ -292,6 +292,13 @@ def _parse_blocks(text: str, pats: Optional[_MarkdownPatterns] = None) -> list[_
     return blocks
 
 
+_RE_SENT_FALLBACK = re.compile(
+    r"(?<!\bDr)(?<!\bMr)(?<!\bMs)(?<!\bJr)(?<!\bSr)(?<!\bVs)(?<!\bSt)(?<!\bNo)"
+    r"(?<!\bMrs)(?<!\bFig)(?<!\bInc)(?<!\bLtd)(?<!\bProf)"
+    r"(?<=[.!?。])\s+"
+)
+
+
 def _split_oversized(
     text: str,
     max_chars: int,
@@ -300,9 +307,10 @@ def _split_oversized(
 ) -> list[str]:
     """Split a block exceeding max_chars at sentence boundaries using NLTK Punkt.
 
-    Falls back to hard-cut with overlap if the punkt data is not available.
-    Punkt handles abbreviations (Dr., U.S.A., Fig.) and Korean sentence endings
-    that the previous regex pattern could not.
+    Falls back to an abbreviation-aware regex tokenizer (and then hard-cut with
+    overlap) if the punkt data is not available. Punkt handles abbreviations
+    (Dr., U.S.A., Fig.) and Korean sentence endings that a naive regex pattern
+    could not.
 
     When pii_patterns is provided the character-level fallback advances each
     cut point past any PII span it would bisect, keeping values like RRNs and
@@ -312,10 +320,12 @@ def _split_oversized(
         from nltk.tokenize import sent_tokenize  # type: ignore
         sentences = sent_tokenize(text)
     except (ImportError, LookupError):
-        # nltk not installed, or punkt data not downloaded: use the hard-cut fallback.
-        sentences = None
+        # nltk not installed, or punkt data not downloaded: try abbreviation-aware
+        # sentence splitting before falling back to character-level hard cuts.
+        candidates = [s.strip() for s in _RE_SENT_FALLBACK.split(text) if s.strip()]
+        sentences = candidates if len(candidates) > 1 else None
 
-    if sentences:
+    if sentences and len(sentences) > 1 and not pii_patterns:
         return _pack_sentences(sentences, max_chars, overlap_chars, text)
 
     # Fallback: hard cut with PII guard
