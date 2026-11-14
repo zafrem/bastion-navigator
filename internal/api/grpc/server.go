@@ -22,6 +22,7 @@ type Server struct {
 	UnimplementedNavigatorServiceServer
 	orch       *orchestrator.Orchestrator
 	grpcServer *grpc.Server
+	tls        bool
 	port       int
 }
 
@@ -29,10 +30,15 @@ type Server struct {
 // size of 16 MB, and a recovery interceptor that maps panics to INTERNAL errors.
 func New(orch *orchestrator.Orchestrator, port int) *Server {
 	s := &Server{orch: orch, port: port}
+	s.grpcServer = s.newServer()
+	return s
+}
 
-	s.grpcServer = grpc.NewServer(
-		grpc.MaxRecvMsgSize(16*1024*1024),
-		grpc.MaxSendMsgSize(16*1024*1024),
+// newServer builds the gRPC server (and registers the service) with any extra options, such as TLS.
+func (s *Server) newServer(extra ...grpc.ServerOption) *grpc.Server {
+	opts := append([]grpc.ServerOption{
+		grpc.MaxRecvMsgSize(16 * 1024 * 1024),
+		grpc.MaxSendMsgSize(16 * 1024 * 1024),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionIdle: 5 * time.Minute,
 			Time:              1 * time.Minute,
@@ -42,12 +48,34 @@ func New(orch *orchestrator.Orchestrator, port int) *Server {
 			loggingInterceptor,
 			recoveryInterceptor,
 		),
-	)
-
-	RegisterNavigatorServiceServer(s.grpcServer, s)
-	reflection.Register(s.grpcServer) // enables grpcurl/grpc-cli introspection
-	return s
+	}, extra...)
+	g := grpc.NewServer(opts...)
+	RegisterNavigatorServiceServer(g, s)
+	reflection.Register(g) // enables grpcurl/grpc-cli introspection
+	return g
 }
+
+// EnableTLS serves gRPC over TLS using the given PEM files. With all three empty it does nothing and
+// the server stays plaintext. clientCAFile (optional) requires client certificates (mutual TLS).
+// Call it before Start/Serve; it returns an error for incomplete or unreadable configuration.
+func (s *Server) EnableTLS(certFile, keyFile, clientCAFile string) error {
+	creds, err := serverTLSCredentials(certFile, keyFile, clientCAFile)
+	if err != nil {
+		return err
+	}
+	if creds == nil {
+		return nil
+	}
+	s.grpcServer = s.newServer(grpc.Creds(creds))
+	s.tls = true
+	return nil
+}
+
+// TLSEnabled reports whether EnableTLS turned TLS on.
+func (s *Server) TLSEnabled() bool { return s.tls }
+
+// Serve accepts connections on lis until the server stops (used by tests with their own listener).
+func (s *Server) Serve(lis net.Listener) error { return s.grpcServer.Serve(lis) }
 
 // Start listens on the configured port and blocks until ctx is cancelled.
 func (s *Server) Start(ctx context.Context) error {

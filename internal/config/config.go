@@ -27,6 +27,13 @@ type ServerConfig struct {
 	RESTPort int `yaml:"rest_port"`
 	GRPCPort int `yaml:"grpc_port"`
 	Workers  int `yaml:"workers"`
+
+	// gRPC TLS. Set grpc_tls_cert and grpc_tls_key (PEM files) to serve gRPC over TLS; the files are
+	// re-read when they change, so rotation needs no restart. grpc_tls_client_ca additionally requires
+	// clients to present a certificate signed by it (mutual TLS). All empty = plaintext.
+	GRPCTLSCert     string `yaml:"grpc_tls_cert"`
+	GRPCTLSKey      string `yaml:"grpc_tls_key"`
+	GRPCTLSClientCA string `yaml:"grpc_tls_client_ca"`
 }
 
 type VectorDBConfig struct {

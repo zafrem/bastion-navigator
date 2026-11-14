@@ -19,6 +19,11 @@ class ServerConfig(BaseModel):
     # orchestrator already resolved it with Vault). When false (default) it can only NARROW what
     # Vault allows. Requires auth_token: trusting unauthenticated callers is refused at startup.
     trust_caller_permissions: bool = False
+    # gRPC TLS: PEM files. Set cert + key to serve gRPC over TLS (files are re-read when they change, so
+    # rotation needs no restart); add client_ca to require client certificates (mutual TLS). Empty = plaintext.
+    grpc_tls_cert: str = ""
+    grpc_tls_key: str = ""
+    grpc_tls_client_ca: str = ""
 
 
 class HNSWConfig(BaseModel):
@@ -101,6 +106,14 @@ class PeerConfig(BaseModel):
     id: str
     endpoint: str
     auth_token: str = ""   # token presented to this peer; defaults to server.auth_token
+    # Connect to this peer over TLS. tls_ca_file: CA that signed the peer's certificate (default: system
+    # roots); tls_server_name: expected certificate name if it differs from the endpoint host;
+    # tls_client_cert / tls_client_key: this node's certificate when the peer requires mutual TLS.
+    tls: bool = False
+    tls_ca_file: str = ""
+    tls_server_name: str = ""
+    tls_client_cert: str = ""
+    tls_client_key: str = ""
     topic_affinity: list[str] = Field(default_factory=list)
     capability: str = "search"   # "search" | "agent"
 

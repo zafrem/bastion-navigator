@@ -10,6 +10,7 @@ from typing import Any
 import grpc
 
 from .auth import GRPC_SERVICE_NAMES, GrpcAuthInterceptor, resolve_token
+from .tls import server_credentials
 from .config import Config
 from .orchestrator import Orchestrator
 from .events import (
@@ -223,12 +224,28 @@ class _NavigatorServiceHandler(grpc.GenericRpcHandler):
 
 
 class GRPCServer:
-    def __init__(self, orch: Orchestrator, pub: Publisher, hm: HookManager, auth_token: str = "") -> None:
+    def __init__(
+        self,
+        orch: Orchestrator,
+        pub: Publisher,
+        hm: HookManager,
+        auth_token: str = "",
+        tls_cert: str = "",
+        tls_key: str = "",
+        tls_client_ca: str = "",
+    ) -> None:
         self._orch = orch
         self._pub = pub
         self._hm = hm
         self._auth_token = resolve_token(auth_token)
+        # Raises TLSConfigError for incomplete or unusable TLS settings (caught by main at startup).
+        self._creds = server_credentials(tls_cert, tls_key, tls_client_ca)
+        self._mutual_tls = bool(tls_client_ca)
         self._server: grpc.Server | None = None
+
+    @property
+    def tls_enabled(self) -> bool:
+        return self._creds is not None
 
     def hooks(self) -> HookManager:
         return self._hm
@@ -242,9 +259,18 @@ class GRPCServer:
             log.warning("[grpc] no auth token configured: the gRPC API accepts unauthenticated callers")
         return server
 
+    def _add_port(self, server: grpc.Server, address: str) -> int:
+        """Bind ``address``, over TLS when configured; returns the bound port."""
+        if self._creds is not None:
+            return server.add_secure_port(address, self._creds)
+        if self._auth_token:
+            log.warning("[grpc] plaintext but a bearer token is required: the token travels unencrypted; "
+                        "set server.grpc_tls_cert/grpc_tls_key, or terminate TLS in front of the gRPC port")
+        return server.add_insecure_port(address)
+
     def serve(self, port: int) -> None:
         self._server = self._make_server()
-        self._server.add_insecure_port(f"[::]:{port}")
+        self._add_port(self._server, f"[::]:{port}")
         self._server.start()
-        log.info("[grpc] navigator listening on :%d", port)
+        log.info("[grpc] navigator listening on :%d (%s)", port, "TLS" if self.tls_enabled else "plaintext")
         self._server.wait_for_termination()

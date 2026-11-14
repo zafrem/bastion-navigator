@@ -27,6 +27,7 @@ from .events import Publisher
 from .hooks import HookManager
 from .rest import build_app
 from .grpc_server import GRPCServer
+from .tls import TLSConfigError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger(__name__)
@@ -103,6 +104,11 @@ def main() -> None:
                     # Peers are authenticated like any other caller: use the peer's own token,
                     # else this node's shared token.
                     auth_token=p.auth_token or resolve_token(cfg.server.auth_token),
+                    tls=p.tls,
+                    tls_ca_file=p.tls_ca_file,
+                    tls_server_name=p.tls_server_name,
+                    tls_client_cert=p.tls_client_cert,
+                    tls_client_key=p.tls_client_key,
                 )
                 for p in cfg.federation.peers
             ],
@@ -116,7 +122,16 @@ def main() -> None:
     hm = HookManager()
 
     # gRPC in background thread
-    grpc_srv = GRPCServer(orch, pub, hm, auth_token=cfg.server.auth_token)
+    try:
+        grpc_srv = GRPCServer(
+            orch, pub, hm,
+            auth_token=cfg.server.auth_token,
+            tls_cert=cfg.server.grpc_tls_cert,
+            tls_key=cfg.server.grpc_tls_key,
+            tls_client_ca=cfg.server.grpc_tls_client_ca,
+        )
+    except TLSConfigError as exc:
+        raise SystemExit(f"refusing to start: gRPC TLS: {exc}")
     grpc_thread = threading.Thread(
         target=grpc_srv.serve,
         args=(cfg.server.grpc_port,),

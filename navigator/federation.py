@@ -32,6 +32,11 @@ class PeerConfig:
     topic_affinity: list[str] = field(default_factory=list)
     capability: str = "search"          # "search" | "agent"
     auth_token: str = field(default="", repr=False)   # bearer token presented to this peer
+    tls: bool = False                   # connect to this peer over TLS
+    tls_ca_file: str = ""               # CA that signed the peer's certificate (default: system roots)
+    tls_server_name: str = ""           # expected certificate name when it differs from the endpoint host
+    tls_client_cert: str = ""           # this node's certificate, if the peer requires mutual TLS
+    tls_client_key: str = ""
     affinity_embedding: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
 
 
@@ -144,6 +149,26 @@ class PeerClient:
             log.warning("federation: peer %s error: %s", self._peer.id, exc)
             return None
 
+    def _channel(self) -> "grpc.aio.Channel":
+        """An insecure channel, or a TLS one (optionally with a client certificate) when the peer uses TLS."""
+        peer = self._peer
+        if not peer.tls:
+            return grpc.aio.insecure_channel(peer.endpoint)
+
+        def read(path: str) -> Optional[bytes]:
+            if not path:
+                return None
+            with open(path, "rb") as f:
+                return f.read()
+
+        creds = grpc.ssl_channel_credentials(
+            root_certificates=read(peer.tls_ca_file),
+            private_key=read(peer.tls_client_key),
+            certificate_chain=read(peer.tls_client_cert),
+        )
+        options = [("grpc.ssl_target_name_override", peer.tls_server_name)] if peer.tls_server_name else []
+        return grpc.aio.secure_channel(peer.endpoint, creds, options=options)
+
     def _call_metadata(self, hop_depth: int) -> list[tuple[str, str]]:
         """Loop-prevention headers, plus the bearer token the peer requires (if any)."""
         metadata = [
@@ -156,7 +181,7 @@ class PeerClient:
 
     async def _do_search(self, req: SearchRequest, hop_depth: int) -> SearchResponse:
         metadata = self._call_metadata(hop_depth)
-        channel = grpc.aio.insecure_channel(self._peer.endpoint)
+        channel = self._channel()
         try:
             payload = json.dumps(req.model_dump()).encode()
             stub_response = await channel.unary_unary(

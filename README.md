@@ -88,6 +88,38 @@ With a token set, every REST and gRPC call must send `Authorization: Bearer <tok
 
 **Federation.** Peers authenticate to each other the same way. A peer entry may set `auth_token`; otherwise this node's `server.auth_token` is sent. The gRPC server answers under the proto's canonical service name (`bastion.navigator.v1.NavigatorService`, which federation calls) and the legacy `navigator.NavigatorService`.
 
+## gRPC TLS
+
+The gRPC port is plaintext by default. Set a certificate and key (PEM files) under `server:` to serve it over TLS:
+
+```yaml
+server:
+  grpc_tls_cert: /etc/navigator/tls/server.pem
+  grpc_tls_key:  /etc/navigator/tls/server.key
+  grpc_tls_client_ca: /etc/navigator/tls/ca.pem   # optional: require client certificates (mutual TLS)
+```
+
+- Cert and key must be set together, and `grpc_tls_client_ca` needs both. A missing, unreadable or mismatched file makes Navigator **refuse to start**.
+- The files are re-read when they change, so rotation needs no restart; a bad replacement keeps the working certificate.
+- The bearer token (see Authenticating callers) still applies inside the TLS connection. With a token configured and no TLS, Navigator logs a warning that the token travels unencrypted.
+- These settings cover the gRPC port; terminate TLS in front of the REST port. (The Go `navigator-cli` server reads the same keys.)
+
+**Federation over TLS.** Peers call each other over gRPC, so a peer that serves TLS needs matching client settings on the nodes that call it:
+
+```yaml
+federation:
+  peers:
+    - id: eu-west
+      endpoint: navigator-eu.internal:9092
+      tls: true
+      tls_ca_file: /etc/navigator/tls/ca.pem          # CA that signed the peer's certificate (default: system roots)
+      # tls_server_name: navigator-eu.internal        # when the certificate name differs from the endpoint host
+      # tls_client_cert: /etc/navigator/tls/client.pem  # only if the peer requires mutual TLS
+      # tls_client_key:  /etc/navigator/tls/client.key
+```
+
+`scripts/gen-dev-certs.sh` (repository root) creates development certificates for trying this locally.
+
 ## API Interfaces
 - **REST API:** `:8082` — `/v1/navigator/search`, `/v1/navigator/search/hybrid`, `/v1/navigator/index`, `/v1/navigator/embed`, `/v1/navigator/rerank`, …
 - **gRPC:** `:9092`

@@ -10,6 +10,12 @@ server:
   auth_token: ""
   # Development only: start without a token and accept unauthenticated callers.
   allow_unauthenticated: false
+  # gRPC TLS (PEM files, re-read when they change so rotation needs no restart). Set cert + key to serve
+  # gRPC over TLS; add client_ca to require client certificates (mutual TLS). Empty = plaintext.
+  # Try it locally: scripts/gen-dev-certs.sh
+  # grpc_tls_cert: ""
+  # grpc_tls_key: ""
+  # grpc_tls_client_ca: ""
   # Trust a caller's user.allowed_categories as authoritative (an authenticated orchestrator already
   # resolved them with Vault). Default false: they can only narrow what Vault allows. Requires auth_token.
   trust_caller_permissions: false
