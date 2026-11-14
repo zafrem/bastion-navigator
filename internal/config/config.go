@@ -28,12 +28,24 @@ type ServerConfig struct {
 	GRPCPort int `yaml:"grpc_port"`
 	Workers  int `yaml:"workers"`
 
+	// Shared bearer token callers must present on REST and gRPC (or env NAVIGATOR_AUTH_TOKEN).
+	AuthToken            string `yaml:"auth_token"`
+	AllowUnauthenticated bool   `yaml:"allow_unauthenticated"`
+
 	// gRPC TLS. Set grpc_tls_cert and grpc_tls_key (PEM files) to serve gRPC over TLS; the files are
 	// re-read when they change, so rotation needs no restart. grpc_tls_client_ca additionally requires
 	// clients to present a certificate signed by it (mutual TLS). All empty = plaintext.
 	GRPCTLSCert     string `yaml:"grpc_tls_cert"`
 	GRPCTLSKey      string `yaml:"grpc_tls_key"`
 	GRPCTLSClientCA string `yaml:"grpc_tls_client_ca"`
+}
+
+// ResolveAuthToken returns the configured caller bearer token, preferring NAVIGATOR_AUTH_TOKEN.
+func (s ServerConfig) ResolveAuthToken() string {
+	if env := os.Getenv("NAVIGATOR_AUTH_TOKEN"); env != "" {
+		return env
+	}
+	return s.AuthToken
 }
 
 type VectorDBConfig struct {

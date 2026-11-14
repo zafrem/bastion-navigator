@@ -108,8 +108,10 @@ func runServer(restPort, grpcPort int) error {
 	defer stop()
 
 	// Run REST and gRPC servers concurrently; either failing stops both.
-	restSrv := rest.New(orch, cfg.Server.RESTPort)
+	authToken := cfg.Server.ResolveAuthToken()
+	restSrv := rest.New(orch, cfg.Server.RESTPort, rest.WithAuthToken(authToken))
 	grpcSrv := grpcserver.New(orch, cfg.Server.GRPCPort)
+	grpcSrv.EnableAuth(authToken)
 	if err := grpcSrv.EnableTLS(cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, cfg.Server.GRPCTLSClientCA); err != nil {
 		return fmt.Errorf("gRPC TLS: %w", err)
 	}

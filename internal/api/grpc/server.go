@@ -2,14 +2,18 @@ package grpc
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
@@ -23,6 +27,8 @@ type Server struct {
 	orch       *orchestrator.Orchestrator
 	grpcServer *grpc.Server
 	tls        bool
+	tlsCreds   credentials.TransportCredentials
+	authToken  string
 	port       int
 }
 
@@ -34,9 +40,9 @@ func New(orch *orchestrator.Orchestrator, port int) *Server {
 	return s
 }
 
-// newServer builds the gRPC server (and registers the service) with any extra options, such as TLS.
+// newServer builds the gRPC server (and registers the service) with current TLS and auth settings.
 func (s *Server) newServer(extra ...grpc.ServerOption) *grpc.Server {
-	opts := append([]grpc.ServerOption{
+	opts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(16 * 1024 * 1024),
 		grpc.MaxSendMsgSize(16 * 1024 * 1024),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
@@ -47,12 +53,29 @@ func (s *Server) newServer(extra ...grpc.ServerOption) *grpc.Server {
 		grpc.ChainUnaryInterceptor(
 			loggingInterceptor,
 			recoveryInterceptor,
+			s.authInterceptor,
 		),
-	}, extra...)
+	}
+	if s.tlsCreds != nil {
+		opts = append(opts, grpc.Creds(s.tlsCreds))
+	}
+	opts = append(opts, extra...)
 	g := grpc.NewServer(opts...)
 	RegisterNavigatorServiceServer(g, s)
 	reflection.Register(g) // enables grpcurl/grpc-cli introspection
 	return g
+}
+
+// EnableAuth configures shared bearer-token authentication on the gRPC server.
+// Call before Start/Serve.
+func (s *Server) EnableAuth(token string) {
+	s.authToken = strings.TrimSpace(token)
+	s.grpcServer = s.newServer()
+}
+
+// AuthEnabled reports whether bearer-token authentication is enabled.
+func (s *Server) AuthEnabled() bool {
+	return s.authToken != ""
 }
 
 // EnableTLS serves gRPC over TLS using the given PEM files. With all three empty it does nothing and
@@ -66,8 +89,9 @@ func (s *Server) EnableTLS(certFile, keyFile, clientCAFile string) error {
 	if creds == nil {
 		return nil
 	}
-	s.grpcServer = s.newServer(grpc.Creds(creds))
+	s.tlsCreds = creds
 	s.tls = true
+	s.grpcServer = s.newServer()
 	return nil
 }
 
@@ -204,5 +228,31 @@ func recoveryInterceptor(ctx context.Context, req interface{}, _ *grpc.UnaryServ
 			err = status.Errorf(codes.Internal, "internal server error")
 		}
 	}()
+	return handler(ctx, req)
+}
+
+func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	if s.authToken == "" {
+		return handler(ctx, req)
+	}
+	if info.FullMethod == "/bastion.navigator.v1.NavigatorService/Health" || strings.HasPrefix(info.FullMethod, "/grpc.reflection.") {
+		return handler(ctx, req)
+	}
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "missing or invalid bearer token")
+	}
+	vals := md.Get("authorization")
+	if len(vals) == 0 {
+		return nil, status.Error(codes.Unauthenticated, "missing or invalid bearer token")
+	}
+	hdr := strings.TrimSpace(vals[0])
+	if len(hdr) <= 7 || !strings.EqualFold(hdr[:7], "Bearer ") {
+		return nil, status.Error(codes.Unauthenticated, "missing or invalid bearer token")
+	}
+	got := strings.TrimSpace(hdr[7:])
+	if subtle.ConstantTimeCompare([]byte(got), []byte(s.authToken)) != 1 {
+		return nil, status.Error(codes.Unauthenticated, "missing or invalid bearer token")
+	}
 	return handler(ctx, req)
 }

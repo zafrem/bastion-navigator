@@ -270,3 +270,39 @@ func TestCollectionInfo_UnknownCollection_Returns404(t *testing.T) {
 		t.Errorf("expected 404, got %d", w.Code)
 	}
 }
+
+func TestRESTAuth_RequiresBearerTokenWhenConfigured(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.SearchDefaults.MinScore = 0
+	orch := orchestrator.New(cfg, noopEmbedder{}, noopSearcher{}, noopReranker{}, openVault{})
+	srv := New(orch, 0, WithAuthToken("nav-secret-token"))
+
+	// Public health probe still succeeds without token.
+	if w := get(t, srv, "/v1/health"); w.Code != http.StatusOK {
+		t.Errorf("expected 200 on /v1/health without token, got %d", w.Code)
+	}
+
+	// Protected route rejects missing token.
+	if w := get(t, srv, "/v1/navigator/collections"); w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 without token, got %d", w.Code)
+	}
+
+	// Protected route rejects wrong token.
+	reqBad := httptest.NewRequest(http.MethodGet, "/v1/navigator/collections", nil)
+	reqBad.Header.Set("Authorization", "Bearer wrong-token")
+	wBad := httptest.NewRecorder()
+	srv.routes().ServeHTTP(wBad, reqBad)
+	if wBad.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with wrong token, got %d", wBad.Code)
+	}
+
+	// Protected route accepts valid token.
+	reqOK := httptest.NewRequest(http.MethodGet, "/v1/navigator/collections", nil)
+	reqOK.Header.Set("Authorization", "Bearer nav-secret-token")
+	wOK := httptest.NewRecorder()
+	srv.routes().ServeHTTP(wOK, reqOK)
+	if wOK.Code != http.StatusOK {
+		t.Errorf("expected 200 with valid token, got %d", wOK.Code)
+	}
+}
+

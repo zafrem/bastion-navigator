@@ -2,9 +2,11 @@ package rest
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -18,11 +20,23 @@ import (
 type Server struct {
 	orchestrator *orchestrator.Orchestrator
 	port         int
+	authToken    string
 	httpServer   *http.Server
 }
 
-func New(orch *orchestrator.Orchestrator, port int) *Server {
+// Option customises the REST server.
+type Option func(*Server)
+
+// WithAuthToken requires callers to present Authorization: Bearer <token> on protected routes.
+func WithAuthToken(token string) Option {
+	return func(s *Server) { s.authToken = strings.TrimSpace(token) }
+}
+
+func New(orch *orchestrator.Orchestrator, port int, opts ...Option) *Server {
 	s := &Server{orchestrator: orch, port: port}
+	for _, o := range opts {
+		o(s)
+	}
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      s.routes(),
@@ -31,6 +45,26 @@ func New(orch *orchestrator.Orchestrator, port int) *Server {
 		IdleTimeout:  60 * time.Second,
 	}
 	return s
+}
+
+func bearerAuthMiddleware(expected string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hdr := strings.TrimSpace(r.Header.Get("Authorization"))
+			if len(hdr) <= 7 || !strings.EqualFold(hdr[:7], "Bearer ") {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="navigator"`)
+				writeError(w, http.StatusUnauthorized, "missing or invalid bearer token")
+				return
+			}
+			got := strings.TrimSpace(hdr[7:])
+			if subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="navigator"`)
+				writeError(w, http.StatusUnauthorized, "missing or invalid bearer token")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func (s *Server) routes() http.Handler {
@@ -44,29 +78,36 @@ func (s *Server) routes() http.Handler {
 
 	h := &handlers{orch: s.orchestrator}
 
-	// Health
+	// Health (public)
 	r.Get("/v1/health", h.Health)
 	r.Get("/v1/health/live", h.Live)
 	r.Get("/v1/health/ready", h.Ready)
 
-	// Metrics (Prometheus)
+	// Metrics (Prometheus, public)
 	r.Handle("/v1/metrics", promhttp.Handler())
 
-	// Search
-	r.Post("/v1/navigator/search", h.Search)
-	r.Post("/v1/navigator/search/hybrid", h.HybridSearch)
-	r.Post("/v1/navigator/search/batch", h.BatchSearch)
+	// Protected API routes
+	r.Group(func(r chi.Router) {
+		if s.authToken != "" {
+			r.Use(bearerAuthMiddleware(s.authToken))
+		}
 
-	// Embedding
-	r.Post("/v1/navigator/embed", h.Embed)
-	r.Post("/v1/navigator/embed/batch", h.BatchEmbed)
+		// Search
+		r.Post("/v1/navigator/search", h.Search)
+		r.Post("/v1/navigator/search/hybrid", h.HybridSearch)
+		r.Post("/v1/navigator/search/batch", h.BatchSearch)
 
-	// Reranking
-	r.Post("/v1/navigator/rerank", h.Rerank)
+		// Embedding
+		r.Post("/v1/navigator/embed", h.Embed)
+		r.Post("/v1/navigator/embed/batch", h.BatchEmbed)
 
-	// Collections
-	r.Get("/v1/navigator/collections", h.Collections)
-	r.Get("/v1/navigator/collections/{name}", h.CollectionInfo)
+		// Reranking
+		r.Post("/v1/navigator/rerank", h.Rerank)
+
+		// Collections
+		r.Get("/v1/navigator/collections", h.Collections)
+		r.Get("/v1/navigator/collections/{name}", h.CollectionInfo)
+	})
 
 	return r
 }

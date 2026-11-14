@@ -16,6 +16,16 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"context"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	"github.com/zafrem/bastion-navigator/internal/models"
 )
 
 // ─── test PKI ────────────────────────────────────────────────────────────────
@@ -297,3 +307,39 @@ func TestTLS_BrokenReplacementKeepsTheWorkingCertificate(t *testing.T) {
 		t.Errorf("a broken replacement changed the served certificate (%d -> %d)", before, got)
 	}
 }
+
+func TestGRPCAuth_RequiresBearerTokenWhenConfigured(t *testing.T) {
+	s := newTestServer(t)
+	s.EnableAuth("nav-grpc-secret")
+	if !s.AuthEnabled() {
+		t.Fatal("AuthEnabled should be true")
+	}
+	addr := serveOn(t, s)
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Health succeeds without token.
+	var healthOut models.HealthStatus
+	if err := conn.Invoke(context.Background(), "/bastion.navigator.v1.NavigatorService/Health", &models.HealthRequest{}, &healthOut); err != nil {
+		t.Fatalf("Health without token failed: %v", err)
+	}
+
+	// Protected RPC fails without token.
+	var colOut models.CollectionsResponse
+	err = conn.Invoke(context.Background(), "/bastion.navigator.v1.NavigatorService/GetCollections", &models.CollectionsRequest{}, &colOut)
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("GetCollections without token: got %v, want Unauthenticated", status.Code(err))
+	}
+
+	// Protected RPC fails with wrong token.
+	badCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer wrong")
+	err = conn.Invoke(badCtx, "/bastion.navigator.v1.NavigatorService/GetCollections", &models.CollectionsRequest{}, &colOut)
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("GetCollections with wrong token: got %v, want Unauthenticated", status.Code(err))
+	}
+}
+
