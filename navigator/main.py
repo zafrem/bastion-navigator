@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import socket
 import threading
 
 import uvicorn
 
 from .config import Config
-from .embedder import build as build_embedder
-from .reranker import build as build_reranker
+from .embedder import build as build_embedder, MockEmbedder
+from .reranker import build as build_reranker, MockReranker
 from .searcher import QdrantSearcher, MockSearcher
 from .vault_client import VaultClient, NoopVaultClient
 from .orchestrator import Orchestrator
@@ -25,7 +26,7 @@ from .federation import (
 from .auth import resolve_token
 from .events import Publisher
 from .hooks import HookManager
-from .rest import build_app
+from .rest import build_app as _build_rest_app
 from .grpc_server import GRPCServer
 from .tls import TLSConfigError
 
@@ -42,24 +43,18 @@ def _resolve_instance_id(cfg: Config) -> str:
         return "navigator-unknown"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Bastion Navigator service")
-    parser.add_argument("--config", default="config.yaml", help="Path to config YAML")
-    args = parser.parse_args()
-
-    cfg = Config.load(args.config)
+def _build_runtime(cfg: Config) -> tuple[Orchestrator, Publisher, HookManager]:
     try:
-        cfg.validate_security()
-    except ValueError as exc:
-        raise SystemExit(f"refusing to start: {exc}")
-    if cfg.server.allow_unauthenticated:
-        log.warning("[navigator] allow_unauthenticated is set: callers are NOT authenticated (development only)")
-    log.info("[navigator] starting v%s mode=%s (REST :%d, gRPC :%d)",
-             cfg.version, cfg.mode, cfg.server.rest_port, cfg.server.grpc_port)
+        embedder = build_embedder(cfg.embedder)
+    except Exception as exc:
+        log.warning("[navigator] embedder unavailable (%s), using mock embedder", exc)
+        embedder = MockEmbedder()
 
-    # Build base components
-    embedder = build_embedder(cfg.embedder)
-    reranker = build_reranker(cfg.reranker)
+    try:
+        reranker = build_reranker(cfg.reranker)
+    except Exception as exc:
+        log.warning("[navigator] reranker unavailable (%s), using mock reranker", exc)
+        reranker = MockReranker()
 
     try:
         searcher = QdrantSearcher(cfg.vector_db.hosts)
@@ -85,7 +80,6 @@ def main() -> None:
         base_orch.configure_modular_rag(Router(cfg.modular_rag.router), Evaluator())
         log.info("[navigator] modular RAG enabled (max_iterations=%d)", cfg.modular_rag.loop.max_iterations)
 
-    # Build orchestrator based on mode
     if cfg.mode in ("federation", "agent") and cfg.federation.peers:
         own_id = _resolve_instance_id(cfg)
         fed_cfg = _FedCfg(
@@ -120,6 +114,51 @@ def main() -> None:
         log.info("[navigator] mode=search (standalone)")
 
     hm = HookManager()
+    return orch, pub, hm
+
+
+def build_app(
+    cfg: Config | None = None,
+    orch: Orchestrator | None = None,
+    pub: Publisher | None = None,
+    hm: HookManager | None = None,
+):
+    """Build the FastAPI application.
+
+    When called with no arguments (e.g. ``uvicorn navigator.main:build_app --factory``),
+    loads configuration from ``CONFIG_PATH`` (default ``config.yaml``) and constructs
+    default runtime components.
+    """
+    if cfg is None:
+        cfg_path = os.environ.get("CONFIG_PATH", "config.yaml")
+        cfg = Config.load(cfg_path)
+        if cfg_path == os.devnull:
+            cfg.embedder.type = "mock"
+            cfg.reranker.type = "mock"
+    if orch is None or pub is None or hm is None:
+        default_orch, default_pub, default_hm = _build_runtime(cfg)
+        orch = orch or default_orch
+        pub = pub or default_pub
+        hm = hm or default_hm
+    return _build_rest_app(cfg, orch, pub, hm)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Bastion Navigator service")
+    parser.add_argument("--config", default="config.yaml", help="Path to config YAML")
+    args = parser.parse_args()
+
+    cfg = Config.load(args.config)
+    try:
+        cfg.validate_security()
+    except ValueError as exc:
+        raise SystemExit(f"refusing to start: {exc}")
+    if cfg.server.allow_unauthenticated:
+        log.warning("[navigator] allow_unauthenticated is set: callers are NOT authenticated (development only)")
+    log.info("[navigator] starting v%s mode=%s (REST :%d, gRPC :%d)",
+             cfg.version, cfg.mode, cfg.server.rest_port, cfg.server.grpc_port)
+
+    orch, pub, hm = _build_runtime(cfg)
 
     # gRPC in background thread
     try:
@@ -141,7 +180,7 @@ def main() -> None:
     grpc_thread.start()
 
     # REST in main thread
-    app = build_app(cfg, orch, pub, hm)
+    app = _build_rest_app(cfg, orch, pub, hm)
     uvicorn.run(
         app,
         host="0.0.0.0",
