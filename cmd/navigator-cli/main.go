@@ -188,12 +188,20 @@ func buildOrchestratorFromConfig(cfg *config.Config) (*orchestrator.Orchestrator
 
 	// Vault
 	var vlt vault.Client
-	if cfg.Vault.Enabled && cfg.Vault.Endpoint != "" {
+	if cfg.Vault.Enabled && cfg.Vault.Endpoint == "" {
+		// Silently falling back to the permissive mock would turn off permission filtering.
+		return nil, fmt.Errorf("vault.enabled is true but vault.endpoint is empty")
+	}
+	if cfg.Vault.Enabled {
 		token := cfg.Vault.AuthToken
 		if token == "" {
 			token = os.Getenv("NAVIGATOR_VAULT_AUTH_TOKEN")
 		}
-		vlt = vault.NewHTTP(cfg.Vault.Endpoint, c, cfg.Vault.PermissionTTL,
+		var permCache cache.Cache
+		if cfg.Vault.CachePermissions {
+			permCache = c
+		}
+		vlt = vault.NewHTTP(cfg.Vault.Endpoint, permCache, cfg.Vault.PermissionTTL,
 			vault.WithToken(token), vault.WithTokenFile(cfg.Vault.AuthTokenFile))
 	} else {
 		vlt = vault.NewMock()

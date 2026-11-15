@@ -55,7 +55,9 @@ func (noopReranker) Rerank(_ context.Context, _ string, candidates []models.Sear
 
 type openVault struct{}
 
-func (openVault) AllowedCategories(_ context.Context, _ string) ([]string, error) { return nil, nil }
+func (openVault) AllowedCategories(_ context.Context, _ models.UserContext) ([]string, error) {
+	return nil, nil
+}
 func (openVault) FilterResults(r []models.SearchResult, _ []string) ([]models.SearchResult, int) {
 	return r, 0
 }

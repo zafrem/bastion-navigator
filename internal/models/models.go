@@ -16,6 +16,21 @@ type SearchRequest struct {
 	UserID    string         `json:"user_id"`
 	Query     string         `json:"query"`
 	Options   *SearchOptions `json:"options,omitempty"`
+
+	// Department and Roles are what Vault decides permissions from. Without them Vault would answer for
+	// the service's own role, so a request that lacks them is denied when Vault is enabled.
+	Department string   `json:"department,omitempty"`
+	Roles      []string `json:"roles,omitempty"`
+	// AllowedCategories may only narrow what Vault allows; it never grants access.
+	AllowedCategories []string `json:"allowed_categories,omitempty"`
+}
+
+// UserContext identifies the end user a permission lookup is for.
+type UserContext struct {
+	UserID     string
+	TenantID   string
+	Department string
+	Roles      []string
 }
 
 // SearchResult is a single document match returned by a search.

@@ -71,6 +71,8 @@ The `NAVIGATOR_VAULT_AUTH_TOKEN` environment variable is used when neither is se
 - **Caller-supplied categories can only narrow.** A `user.allowed_categories` in the request is intersected with what Vault allows, so it can restrict a user but never grant more. See `server.trust_caller_permissions` below for the opt-in exception.
 - **No user means no access.** With Vault enabled, a request without a `user_id` is denied. It is unrestricted only when Vault is disabled (there is then no permission model).
 
+The Go server (`navigator-cli server`) behaves the same way. Its search request carries the user as flat fields: `user_id`, `department`, `roles` and an optional `allowed_categories` that can only narrow Vault's answer. Permissions are cached for `vault.permission_ttl` when `vault.cache_permissions` is true, keyed by tenant, user, department and roles, so a revocation in Vault takes effect once the entry expires. A request Vault denies returns no results with `strategy: "denied"` and never reaches the embedder or vector store. `vault.enabled: true` with an empty `vault.endpoint` is refused at startup instead of silently turning filtering off.
+
 ## Authenticating callers
 
 Navigator acts on the tenant, user, department and roles a caller asserts, so *who may call it* is the control that matters. Set a shared bearer token:

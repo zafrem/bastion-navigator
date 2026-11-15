@@ -4,6 +4,7 @@ package orchestrator
 
 import (
 	"context"
+	"log"
 	"sort"
 	"time"
 
@@ -29,9 +30,10 @@ type Reranker interface {
 	Rerank(ctx context.Context, query string, candidates []models.SearchResult, topK int) ([]models.SearchResult, error)
 }
 
-// Vault applies row-level permission filters to search results.
+// Vault resolves a user's permitted data categories and filters results to them. A nil category slice
+// means unrestricted (Vault disabled); a non-nil empty one means no access.
 type Vault interface {
-	AllowedCategories(ctx context.Context, userID string) ([]string, error)
+	AllowedCategories(ctx context.Context, user models.UserContext) ([]string, error)
 	FilterResults(results []models.SearchResult, categories []string) ([]models.SearchResult, int)
 }
 
@@ -53,6 +55,17 @@ func New(cfg *config.Config, emb Embedder, srch Searcher, rnk Reranker, vlt Vaul
 func (o *Orchestrator) Search(ctx context.Context, req models.SearchRequest) (models.SearchResponse, error) {
 	start := time.Now()
 	opts := o.mergeDefaults(req.Options)
+
+	// Resolve permissions before doing any work: no access means no search.
+	allowed := o.resolvePermissions(ctx, req)
+	if allowed != nil && len(allowed) == 0 {
+		return models.SearchResponse{
+			RequestID:        req.RequestID,
+			Results:          []models.SearchResult{},
+			Metadata:         models.SearchMetadata{Strategy: "denied"},
+			ProcessingTimeMs: float64(time.Since(start).Microseconds()) / 1000.0,
+		}, nil
+	}
 
 	vec, err := o.embedder.Embed(ctx, req.Query)
 	if err != nil {
@@ -96,7 +109,7 @@ func (o *Orchestrator) Search(ctx context.Context, req models.SearchRequest) (mo
 	}
 
 	total := len(all)
-	filtered, filteredOut := o.vault.FilterResults(all, nil)
+	filtered, filteredOut := o.vault.FilterResults(all, allowed)
 
 	strategy := "vector"
 	if opts.UseHybrid && opts.UseReranking {
@@ -140,6 +153,42 @@ func (o *Orchestrator) Search(ctx context.Context, req models.SearchRequest) (mo
 		},
 		ProcessingTimeMs: dur,
 	}, nil
+}
+
+// resolvePermissions returns the categories the request's user may search: nil is unrestricted (Vault
+// disabled), an empty slice is no access. Vault is authoritative; categories supplied by the caller can
+// only narrow its answer. If Vault cannot be consulted, access is denied rather than granted.
+func (o *Orchestrator) resolvePermissions(ctx context.Context, req models.SearchRequest) []string {
+	allowed, err := o.vault.AllowedCategories(ctx, models.UserContext{
+		UserID:     req.UserID,
+		TenantID:   req.TenantID,
+		Department: req.Department,
+		Roles:      req.Roles,
+	})
+	if err != nil {
+		log.Printf("[orchestrator] Vault permission lookup failed for %q, denying access: %v", req.UserID, err)
+		return []string{}
+	}
+	if allowed == nil {
+		if len(req.AllowedCategories) > 0 {
+			return req.AllowedCategories
+		}
+		return nil
+	}
+	if len(req.AllowedCategories) == 0 {
+		return allowed
+	}
+	permitted := make(map[string]struct{}, len(allowed))
+	for _, c := range allowed {
+		permitted[c] = struct{}{}
+	}
+	narrowed := []string{}
+	for _, c := range req.AllowedCategories {
+		if _, ok := permitted[c]; ok {
+			narrowed = append(narrowed, c)
+		}
+	}
+	return narrowed
 }
 
 // Embed delegates to the underlying embedder.
