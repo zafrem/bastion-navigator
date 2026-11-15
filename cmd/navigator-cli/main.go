@@ -90,6 +90,13 @@ func runServer(restPort, grpcPort int) error {
 		cfg.Server.GRPCPort = grpcPort
 	}
 
+	if err := cfg.Server.ValidateSecurity(); err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
+	if cfg.Server.ResolveAuthToken() == "" {
+		log.Printf("WARNING: server.allow_unauthenticated is set: callers are NOT authenticated (development only)")
+	}
+
 	fmt.Println("🚀 Bastion-Navigator v1.0 starting...")
 
 	orch, err := buildOrchestratorFromConfig(cfg)

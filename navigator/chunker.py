@@ -325,7 +325,7 @@ def _split_oversized(
         candidates = [s.strip() for s in _RE_SENT_FALLBACK.split(text) if s.strip()]
         sentences = candidates if len(candidates) > 1 else None
 
-    if sentences and len(sentences) > 1 and not pii_patterns:
+    if sentences and len(sentences) > 1:
         return _pack_sentences(sentences, max_chars, overlap_chars, text)
 
     # Fallback: hard cut with PII guard

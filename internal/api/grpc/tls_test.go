@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/encoding"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -316,7 +317,8 @@ func TestGRPCAuth_RequiresBearerTokenWhenConfigured(t *testing.T) {
 	}
 	addr := serveOn(t, s)
 
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.ForceCodec(jsonCodec{})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,3 +345,36 @@ func TestGRPCAuth_RequiresBearerTokenWhenConfigured(t *testing.T) {
 	}
 }
 
+
+func TestGRPCAuth_ReflectionRequiresToken(t *testing.T) {
+	s := newTestServer(t)
+	s.EnableAuth("nav-grpc-secret")
+	addr := serveOn(t, s)
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.ForceCodec(jsonCodec{})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	stream, err := conn.NewStream(ctx, &grpc.StreamDesc{StreamName: "ServerReflectionInfo", ServerStreams: true, ClientStreams: true},
+		"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo")
+	if err == nil {
+		var out struct{}
+		err = stream.RecvMsg(&out)
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("reflection without token: got %v, want Unauthenticated", err)
+	}
+}
+
+// The JSON codec is scoped to this server; it must not replace the process-wide protobuf codec.
+func TestJSONCodecDoesNotReplaceProtoCodec(t *testing.T) {
+	if c := encoding.GetCodec("proto"); c != nil {
+		if _, isJSON := c.(jsonCodec); isJSON {
+			t.Fatal(`jsonCodec is registered as "proto", replacing the global protobuf codec`)
+		}
+	}
+}

@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -46,6 +48,16 @@ func (s ServerConfig) ResolveAuthToken() string {
 		return env
 	}
 	return s.AuthToken
+}
+
+// ValidateSecurity refuses a server configuration that would accept unauthenticated callers without an
+// explicit development opt-in (server.allow_unauthenticated).
+func (s ServerConfig) ValidateSecurity() error {
+	if strings.TrimSpace(s.ResolveAuthToken()) == "" && !s.AllowUnauthenticated {
+		return errors.New("server.auth_token (or NAVIGATOR_AUTH_TOKEN) is required: Navigator enforces tenant-isolated " +
+			"search, so it must authenticate its callers. For local development only, set server.allow_unauthenticated: true")
+	}
+	return nil
 }
 
 type VectorDBConfig struct {

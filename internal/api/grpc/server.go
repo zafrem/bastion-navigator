@@ -43,6 +43,7 @@ func New(orch *orchestrator.Orchestrator, port int) *Server {
 // newServer builds the gRPC server (and registers the service) with current TLS and auth settings.
 func (s *Server) newServer(extra ...grpc.ServerOption) *grpc.Server {
 	opts := []grpc.ServerOption{
+		grpc.ForceServerCodec(jsonCodec{}),
 		grpc.MaxRecvMsgSize(16 * 1024 * 1024),
 		grpc.MaxSendMsgSize(16 * 1024 * 1024),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
@@ -55,6 +56,7 @@ func (s *Server) newServer(extra ...grpc.ServerOption) *grpc.Server {
 			recoveryInterceptor,
 			s.authInterceptor,
 		),
+		grpc.StreamInterceptor(s.streamAuthInterceptor),
 	}
 	if s.tlsCreds != nil {
 		opts = append(opts, grpc.Creds(s.tlsCreds))
@@ -232,27 +234,41 @@ func recoveryInterceptor(ctx context.Context, req interface{}, _ *grpc.UnaryServ
 }
 
 func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	if s.authToken == "" {
-		return handler(ctx, req)
+	if err := s.authenticate(ctx, info.FullMethod); err != nil {
+		return nil, err
 	}
-	if info.FullMethod == "/bastion.navigator.v1.NavigatorService/Health" || strings.HasPrefix(info.FullMethod, "/grpc.reflection.") {
-		return handler(ctx, req)
+	return handler(ctx, req)
+}
+
+// streamAuthInterceptor protects streaming calls, notably schema reflection, which would otherwise
+// reveal the service surface to unauthenticated callers.
+func (s *Server) streamAuthInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	if err := s.authenticate(ss.Context(), info.FullMethod); err != nil {
+		return err
 	}
+	return handler(srv, ss)
+}
+
+// authenticate checks the shared bearer token; Health stays public for probes.
+func (s *Server) authenticate(ctx context.Context, fullMethod string) error {
+	if s.authToken == "" || fullMethod == "/bastion.navigator.v1.NavigatorService/Health" {
+		return nil
+	}
+	unauth := status.Error(codes.Unauthenticated, "missing or invalid bearer token")
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "missing or invalid bearer token")
+		return unauth
 	}
 	vals := md.Get("authorization")
 	if len(vals) == 0 {
-		return nil, status.Error(codes.Unauthenticated, "missing or invalid bearer token")
+		return unauth
 	}
 	hdr := strings.TrimSpace(vals[0])
 	if len(hdr) <= 7 || !strings.EqualFold(hdr[:7], "Bearer ") {
-		return nil, status.Error(codes.Unauthenticated, "missing or invalid bearer token")
+		return unauth
 	}
-	got := strings.TrimSpace(hdr[7:])
-	if subtle.ConstantTimeCompare([]byte(got), []byte(s.authToken)) != 1 {
-		return nil, status.Error(codes.Unauthenticated, "missing or invalid bearer token")
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(hdr[7:])), []byte(s.authToken)) != 1 {
+		return unauth
 	}
-	return handler(ctx, req)
+	return nil
 }

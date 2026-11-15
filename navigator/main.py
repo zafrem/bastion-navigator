@@ -43,24 +43,28 @@ def _resolve_instance_id(cfg: Config) -> str:
         return "navigator-unknown"
 
 
+def _or_mock(cfg: Config, what: str, build, mock):
+    """Build a real component; fall back to its mock only in explicit development mode.
+
+    A silent fallback in production would serve meaningless embeddings, ranking or search results behind a
+    healthy status, so outside ``server.allow_unauthenticated`` a failure stops startup instead.
+    """
+    try:
+        return build()
+    except Exception as exc:
+        if not cfg.server.allow_unauthenticated:
+            raise RuntimeError(
+                f"{what} unavailable ({exc}); refusing to fall back to a mock outside development "
+                "(server.allow_unauthenticated)"
+            ) from exc
+        log.warning("[navigator] %s unavailable (%s), using mock (development mode)", what, exc)
+        return mock()
+
+
 def _build_runtime(cfg: Config) -> tuple[Orchestrator, Publisher, HookManager]:
-    try:
-        embedder = build_embedder(cfg.embedder)
-    except Exception as exc:
-        log.warning("[navigator] embedder unavailable (%s), using mock embedder", exc)
-        embedder = MockEmbedder()
-
-    try:
-        reranker = build_reranker(cfg.reranker)
-    except Exception as exc:
-        log.warning("[navigator] reranker unavailable (%s), using mock reranker", exc)
-        reranker = MockReranker()
-
-    try:
-        searcher = QdrantSearcher(cfg.vector_db.hosts)
-    except Exception as exc:
-        log.warning("[navigator] qdrant unavailable (%s), using mock searcher", exc)
-        searcher = MockSearcher()
+    embedder = _or_mock(cfg, "embedder", lambda: build_embedder(cfg.embedder), MockEmbedder)
+    reranker = _or_mock(cfg, "reranker", lambda: build_reranker(cfg.reranker), MockReranker)
+    searcher = _or_mock(cfg, "vector search", lambda: QdrantSearcher(cfg.vector_db.hosts), MockSearcher)
 
     vault = (
         VaultClient(
@@ -135,6 +139,11 @@ def build_app(
         if cfg_path == os.devnull:
             cfg.embedder.type = "mock"
             cfg.reranker.type = "mock"
+        # The factory is an entry point of its own (uvicorn --factory): apply the same startup checks as main().
+        try:
+            cfg.validate_security()
+        except ValueError as exc:
+            raise SystemExit(f"refusing to start: {exc}")
     if orch is None or pub is None or hm is None:
         default_orch, default_pub, default_hm = _build_runtime(cfg)
         orch = orch or default_orch
@@ -158,7 +167,10 @@ def main() -> None:
     log.info("[navigator] starting v%s mode=%s (REST :%d, gRPC :%d)",
              cfg.version, cfg.mode, cfg.server.rest_port, cfg.server.grpc_port)
 
-    orch, pub, hm = _build_runtime(cfg)
+    try:
+        orch, pub, hm = _build_runtime(cfg)
+    except RuntimeError as exc:
+        raise SystemExit(f"refusing to start: {exc}")
 
     # gRPC in background thread
     try:
