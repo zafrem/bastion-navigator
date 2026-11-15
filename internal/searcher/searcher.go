@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/zafrem/bastion-navigator/internal/models"
@@ -42,10 +43,36 @@ func (q *qdrantSearcher) host() string {
 	return q.hosts[0]
 }
 
+// qdrantPoint is one search hit. Qdrant point IDs are unsigned integers or UUID strings, and payload
+// values can be any JSON type, so both are decoded loosely and rendered as strings.
 type qdrantPoint struct {
-	ID      string            `json:"id"`
-	Score   float64           `json:"score"`
-	Payload map[string]string `json:"payload"`
+	ID      json.RawMessage        `json:"id"`
+	Score   float64                `json:"score"`
+	Payload map[string]interface{} `json:"payload"`
+}
+
+// pointID renders a Qdrant point ID (a JSON string or number) as a string.
+func pointID(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// stringPayload flattens a payload to strings: strings as-is, everything else as its JSON text.
+func stringPayload(in map[string]interface{}) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		if s, ok := v.(string); ok {
+			out[k] = s
+			continue
+		}
+		if b, err := json.Marshal(v); err == nil {
+			out[k] = string(b)
+		}
+	}
+	return out
 }
 
 type qdrantSearchResp struct {
@@ -92,12 +119,13 @@ func (q *qdrantSearcher) VectorSearch(ctx context.Context, collection string, ve
 	}
 	out := make([]models.SearchResult, 0, len(result.Result))
 	for _, p := range result.Result {
+		payload := stringPayload(p.Payload)
 		out = append(out, models.SearchResult{
-			DocumentID: p.ID,
-			Content:    p.Payload["content"],
+			DocumentID: pointID(p.ID),
+			Content:    payload["content"],
 			Score:      p.Score,
-			Category:   p.Payload["category"],
-			Metadata:   p.Payload,
+			Category:   payload["category"],
+			Metadata:   payload,
 		})
 	}
 	return out, nil
@@ -119,7 +147,9 @@ type qdrantCollectionsResp struct {
 
 type qdrantCollectionInfoResp struct {
 	Result struct {
-		VectorsCount int    `json:"vectors_count"`
+		// vectors_count is deprecated and null in current Qdrant releases; points_count is authoritative.
+		VectorsCount *int   `json:"vectors_count"`
+		PointsCount  *int   `json:"points_count"`
 		Status       string `json:"status"`
 	} `json:"result"`
 }
@@ -166,9 +196,16 @@ func (q *qdrantSearcher) collectionInfo(ctx context.Context, name string) (model
 	defer resp.Body.Close()
 	var info qdrantCollectionInfoResp
 	_ = json.NewDecoder(resp.Body).Decode(&info)
+	count := 0
+	switch {
+	case info.Result.PointsCount != nil:
+		count = *info.Result.PointsCount
+	case info.Result.VectorsCount != nil:
+		count = *info.Result.VectorsCount
+	}
 	return models.CollectionInfo{
 		Name:        name,
-		VectorCount: info.Result.VectorsCount,
+		VectorCount: count,
 		Status:      info.Result.Status,
 	}, nil
 }

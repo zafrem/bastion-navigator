@@ -50,6 +50,7 @@ Navigator starts the REST API on **:8082** and gRPC on **:9092**.
 - `make lint`   — ruff check
 - `make format` — ruff format
 - `make docker-up` / `make docker-down` — run the stack with Docker Compose
+- Go Qdrant end-to-end test (REST API → orchestrator → real Qdrant, with the real Vault client): start Qdrant, e.g. `podman run -d --rm -p 16333:6333 docker.io/qdrant/qdrant:v1.12.4`, then `NAVIGATOR_E2E_QDRANT=localhost:16333 go test ./internal/api/rest -run QdrantE2E -v`. Without the variable the test is skipped; CI runs it against a Qdrant service container.
 
 ## Vault integration
 
