@@ -1,4 +1,4 @@
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -17,6 +17,10 @@ RUN pip install --no-cache-dir -e .
 
 COPY navigator/ ./navigator/
 COPY config/ ./config/
+
+RUN useradd --system --uid 10001 --create-home app \
+    && mkdir -p /models && chown -R app:app /app /models
+USER app
 
 EXPOSE 8082 9092
 
