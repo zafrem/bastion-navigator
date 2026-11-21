@@ -102,6 +102,16 @@ class EventsConfig(BaseModel):
     enabled: bool = True
 
 
+class ExceptionsConfig(BaseModel):
+    """Scoped exceptions signed by Tracker. Off unless a public key is set (env NAVIGATOR_EXCEPTIONS_PUBLIC_KEY).
+
+    Several comma-separated keys are accepted while a key is rotated. ``file`` is where verified
+    exceptions are kept, so Navigator enforces from its own copy even when Tracker or NATS is down.
+    """
+    public_key: str = ""
+    file: str = ""
+
+
 class PeerConfig(BaseModel):
     id: str
     endpoint: str
@@ -231,6 +241,7 @@ class Config(BaseModel):
     vault: VaultConfig = Field(default_factory=VaultConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     events: EventsConfig = Field(default_factory=EventsConfig)
+    exceptions: ExceptionsConfig = Field(default_factory=ExceptionsConfig)
     federation: FederationConfig = Field(default_factory=FederationConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     modular_rag: ModularRAGConfig = Field(default_factory=ModularRAGConfig)

@@ -213,6 +213,14 @@ def event_query_transformed(
     return ev
 
 
+def event_exception_applied(tc: TraceContext, exception_ids: list[str]) -> NavigatorEvent:
+    """Emitted when a scoped exception exempted a check, so the audit trail shows every relaxation."""
+    ev = _new_event(tc, "exception_applied", "warning", "audit", {"exception_ids": exception_ids})
+    ev.status = "passed"
+    ev.action_taken = "exception_applied"
+    return ev
+
+
 def event_purpose_filtered(
     tc: TraceContext,
     document_id: str,

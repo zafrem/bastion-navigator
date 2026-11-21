@@ -31,8 +31,9 @@ from .events import (
     event_search_iteration, event_loop_completed,
     event_purpose_filtered, event_chunk_stale, event_query_transformed,
     event_document_reindexed, event_sub_queries_decomposed,
-    event_steward_purposes_updated,
+    event_steward_purposes_updated, event_exception_applied,
 )
+from .exceptions import Client as ExceptionsClient
 from . import metrics
 
 log = logging.getLogger(__name__)
@@ -67,6 +68,34 @@ class Orchestrator:
         self._evaluator: Optional[Evaluator] = None
         self._hyde: Optional[HyDETransformer] = None
         self._decomposer: Optional[QueryDecomposer] = None
+        self._exceptions: Optional[ExceptionsClient] = None
+
+    def set_exceptions(self, client: Optional[ExceptionsClient]) -> None:
+        """Install the scoped-exception store. None (the default) means nothing is exempted."""
+        self._exceptions = client
+
+    def _apply_purpose_filter(self, results: list[SearchResult], req, tc) -> list[SearchResult]:
+        """Purpose pre-filter (MR-04-002), with an optional scoped exception.
+
+        A signed exception for rule ``navigator.purpose:<purpose>`` lets a tenant use that declared
+        purpose against documents that do not list it. Tenant isolation and Vault permission
+        filtering are separate controls and can never be exempted.
+        """
+        allowed, excluded = _filter_by_purpose(results, req.purpose)
+        if not excluded:
+            return allowed
+        client = self._exceptions
+        user_id = req.user.user_id if getattr(req, "user", None) else ""
+        exc_id = client.allowed(f"navigator.purpose:{req.purpose}", req.tenant_id, user_id) if client else None
+        if exc_id:
+            if self._publisher:
+                self._publisher.publish(event_exception_applied(tc, [exc_id]))
+            return list(results)  # exempted: keep everything, recorded above
+        if self._publisher:
+            for r in excluded:
+                pp = r.metadata.get("permitted_purposes", "").split(",")
+                self._publisher.publish(event_purpose_filtered(tc, r.document_id, req.purpose, pp))
+        return allowed
 
     def configure_modular_rag(self, router: Router, evaluator: Evaluator) -> None:
         """Enable Modular RAG components (MR-01/03/02/04/05). Called from main.py when enabled."""
@@ -211,13 +240,7 @@ class Orchestrator:
             # MR-04-002: purpose pre-filter — exclude results whose permitted_purposes
             # does not include the declared purpose.
             if req.purpose:
-                iter_results, purpose_excluded = _filter_by_purpose(iter_results, req.purpose)
-                if purpose_excluded and self._publisher:
-                    for r in purpose_excluded:
-                        pp = r.metadata.get("permitted_purposes", "").split(",")
-                        self._publisher.publish(
-                            event_purpose_filtered(tc, r.document_id, req.purpose, pp)
-                        )
+                iter_results = self._apply_purpose_filter(iter_results, req, tc)
 
             # Circuit breaker: identical result set as previous iteration.
             doc_ids = sorted(r.document_id for r in iter_results)

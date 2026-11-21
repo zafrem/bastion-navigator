@@ -25,6 +25,7 @@ from .federation import (
 )
 from .auth import resolve_token
 from .events import Publisher
+from .exceptions import Client as ExceptionsClient, ExceptionsError
 from .hooks import HookManager
 from .rest import build_app as _build_rest_app
 from .grpc_server import GRPCServer
@@ -79,6 +80,19 @@ def _build_runtime(cfg: Config) -> tuple[Orchestrator, Publisher, HookManager]:
     pub = Publisher(cfg.events.nats_url)
     rewriter = TokenRewriter(token_pattern=cfg.token_rewriter.token_pattern)
     base_orch = Orchestrator(cfg, embedder, searcher, reranker, vault, rewriter=rewriter, publisher=pub)
+
+    # Scoped exceptions: verified against Tracker's public key and kept in a local file, so Navigator
+    # enforces from its own copy and keeps working with Tracker or NATS down. No key = feature off.
+    pub_keys = os.environ.get("NAVIGATOR_EXCEPTIONS_PUBLIC_KEY", cfg.exceptions.public_key)
+    exc_file = cfg.exceptions.file or ("navigator-exceptions.json" if pub_keys else "")
+    try:
+        exc_client = ExceptionsClient("navigator", pub_keys, exc_file)
+    except ExceptionsError as exc:
+        raise SystemExit(f"refusing to start: exceptions: {exc}")
+    if exc_client.enabled:
+        base_orch.set_exceptions(exc_client)
+        exc_client.start(cfg.events.nats_url)
+        log.info("[navigator] scoped exceptions enabled (file %s)", exc_file)
 
     if cfg.modular_rag.enabled:
         base_orch.configure_modular_rag(Router(cfg.modular_rag.router), Evaluator())

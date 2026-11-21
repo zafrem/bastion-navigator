@@ -12,6 +12,7 @@ dependencies = [
     "sentence-transformers>=3.0",
     "qdrant-client>=1.9",
     "nats-py>=2.7",
+    "cryptography>=42",
     "grpcio>=1.64",
     "prometheus-client>=0.20",
     "pydantic>=2.7",
