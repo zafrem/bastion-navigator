@@ -235,7 +235,7 @@ func Defaults() *Config {
 func Load(path string) (*Config, error) {
 	cfg := Defaults()
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path comes from operator config or CLI, not request input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return cfg, nil
