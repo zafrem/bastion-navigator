@@ -118,7 +118,7 @@ type mockEmbedder struct {
 
 // NewMock returns an Embedder that produces random unit vectors of the given dimensionality.
 func NewMock(dim int) Embedder {
-	return &mockEmbedder{dim: dim, rng: rand.New(rand.NewSource(42))}
+	return &mockEmbedder{dim: dim, rng: rand.New(rand.NewSource(42))} // #nosec G404 -- deterministic mock vectors for tests, not security-sensitive
 }
 
 func (m *mockEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {

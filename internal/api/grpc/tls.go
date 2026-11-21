@@ -78,7 +78,7 @@ func serverTLSCredentials(certFile, keyFile, clientCAFile string) (credentials.T
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: rc.GetCertificate}
 	if clientCAFile != "" {
-		pemBytes, err := os.ReadFile(clientCAFile)
+		pemBytes, err := os.ReadFile(clientCAFile) // #nosec G304 -- path comes from operator config or CLI, not request input
 		if err != nil {
 			return nil, fmt.Errorf("read grpc_tls_client_ca: %w", err)
 		}
