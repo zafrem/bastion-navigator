@@ -209,7 +209,7 @@ def main() -> None:
     app = _build_rest_app(cfg, orch, pub, hm)
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host=cfg.server.host,
         port=cfg.server.rest_port,
         log_level="info",
     )

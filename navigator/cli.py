@@ -5,13 +5,23 @@ import argparse
 import json
 import sys
 from typing import Any
+from urllib.parse import urlparse
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
+def _url(base_url: str, path: str) -> str:
+    """Build the request URL, refusing anything but http(s): urlopen would also read file: and ftp: URLs."""
+    url = base_url.rstrip("/") + path
+    if urlparse(url).scheme not in ("http", "https"):
+        raise ValueError(f"--api must be an http:// or https:// URL, got {base_url!r}")
+    return url
+
+
 def _api_get(base_url: str, path: str) -> Any:
     import urllib.request
-    with urllib.request.urlopen(base_url.rstrip("/") + path, timeout=10) as resp:
+    # B310: _url() has already restricted the scheme to http(s).
+    with urllib.request.urlopen(_url(base_url, path), timeout=10) as resp:  # nosec B310
         return json.loads(resp.read())
 
 
@@ -19,12 +29,13 @@ def _api_post(base_url: str, path: str, payload: dict) -> Any:
     import urllib.request
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
-        base_url.rstrip("/") + path,
+        _url(base_url, path),
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    # B310: _url() has already restricted the scheme to http(s).
+    with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
         return json.loads(resp.read())
 
 

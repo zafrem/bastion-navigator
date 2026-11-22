@@ -7,6 +7,9 @@ from .auth import resolve_token
 
 
 class ServerConfig(BaseModel):
+    # Interface the REST server binds to. All interfaces by default so containers and other hosts can reach it;
+    # set 127.0.0.1 to keep it local.
+    host: str = "0.0.0.0"  # nosec B104
     rest_port: int = 8082
     grpc_port: int = 9092
     workers: int = 4
