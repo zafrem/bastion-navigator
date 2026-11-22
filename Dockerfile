@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/models/huggingface \
     SENTENCE_TRANSFORMERS_HOME=/models/sentence-transformers
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Apply the distribution's security fixes on top of the (periodically rebuilt) base image.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
     && rm -rf /var/lib/apt/lists/*
